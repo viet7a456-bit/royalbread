@@ -1,0 +1,19 @@
+DirectoryIndex index.php
+RewriteEngine On
+
+# Block hidden files, but allow ACME challenge if the host needs it.
+RewriteRule (^|/)\.(?!well-known/) - [F,L]
+
+# Block sensitive file types from direct access.
+RewriteRule \.(sql|bak|log|ini|conf)$ - [F,L,NC]
+
+# Block direct access to internal project folders.
+RewriteRule ^(app|database|tmp|deploy|outputs)(/|$) - [F,L,NC]
+
+# Force the site root to hit the PHP front controller instead of relying on host directory index behavior.
+RewriteRule ^$ index.php [L]
+
+# Route clean URLs to the front controller.
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule . index.php [L,QSA]
