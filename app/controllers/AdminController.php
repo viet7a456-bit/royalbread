@@ -5,10 +5,34 @@ declare(strict_types=1);
 class AdminController extends Controller
 {
     private const FINAL_ORDER_STATUSES = ['completed', 'cancelled'];
+    private const MENU_ITEMS_PER_PAGE = 10;
+    private const REVIEW_ITEMS_PER_PAGE = 10;
+
+    private function logAdminFeatureError(Throwable $error): void
+    {
+        $logDir = ROOT_PATH . '/tmp/logs';
+        if (!is_dir($logDir)) {
+            @mkdir($logDir, 0755, true);
+        }
+
+        $entry = sprintf(
+            "[%s] Admin feature error: %s\n%s\n",
+            date('Y-m-d H:i:s'),
+            $error->getMessage(),
+            $error->getTraceAsString()
+        );
+        @file_put_contents($logDir . '/admin_features.log', $entry, FILE_APPEND | LOCK_EX);
+        error_log('RoyalBread admin feature error: ' . $error->getMessage());
+    }
 
     private function siteSettings(): array
     {
-        return (new Setting())->all();
+        try {
+            return (new Setting())->all();
+        } catch (Throwable $featureError) {
+            $this->logAdminFeatureError($featureError);
+            return [];
+        }
     }
 
     private function requestedExportFormat(): string
@@ -16,6 +40,34 @@ class AdminController extends Controller
         $format = strtolower(trim((string) ($_GET['format'] ?? 'xlsx')));
 
         return in_array($format, ['csv', 'xlsx', 'pdf'], true) ? $format : 'xlsx';
+    }
+
+    private function requestedMenuPage(): int
+    {
+        return max(1, (int) ($_POST['page'] ?? $_GET['page'] ?? 1));
+    }
+
+    private function redirectToAdminMenuPage(int $page): void
+    {
+        $this->redirectTo('admin/menu?page=' . max(1, $page));
+    }
+
+    private function requestedReviewPage(): int
+    {
+        return max(1, (int) ($_GET['page'] ?? 1));
+    }
+
+    private function redirectToAdminReviewsPage(int $page, string $status = ''): void
+    {
+        $query = [
+            'page' => max(1, $page),
+        ];
+
+        if ($status !== '') {
+            $query['status'] = $status;
+        }
+
+        $this->redirectTo('admin/reviews?' . http_build_query($query));
     }
 
     private function filteredOrders(array $allOrders, string $searchQuery, string $searchDate): array
@@ -31,6 +83,8 @@ class AdminController extends Controller
                     (string) ($order['phone'] ?? ''),
                     (string) ($order['customer_email'] ?? ''),
                     (string) ($order['id'] ?? ''),
+                    (string) ($order['payment_reference'] ?? ''),
+                    (string) ($order['order_items_text'] ?? ''),
                 ];
 
                 $match = false;
@@ -52,6 +106,36 @@ class AdminController extends Controller
         }
 
         return $filteredOrders;
+    }
+
+    private function decorateOrdersWithItems(array $orders, Order $orderModel): array
+    {
+        if ($orders === []) {
+            return [];
+        }
+
+        $itemsByOrderId = $orderModel->itemsForOrders(array_map(
+            static fn(array $order): int => (int) ($order['id'] ?? 0),
+            $orders
+        ));
+
+        foreach ($orders as &$order) {
+            $orderId = (int) ($order['id'] ?? 0);
+            $items = $itemsByOrderId[$orderId] ?? [];
+            $order['items'] = $items;
+            $order['items_count'] = count($items);
+            $order['items_quantity_total'] = array_sum(array_map(
+                static fn(array $item): int => (int) ($item['quantity'] ?? 0),
+                $items
+            ));
+            $order['order_items_text'] = implode(' | ', array_map(
+                static fn(array $item): string => trim((string) ($item['menu_item_name'] ?? '')),
+                $items
+            ));
+        }
+        unset($order);
+
+        return $orders;
     }
 
     private function filteredCompletedOrders(array $allOrders, string $filterDate, string $filterMonth): array
@@ -95,6 +179,7 @@ class AdminController extends Controller
             'contact_hero_image' => $slideOne,
         ];
     }
+
 
     private function spotlightCandidates(): array
     {
@@ -191,13 +276,10 @@ class AdminController extends Controller
         return array_values($matchedKeys);
     }
 
-    private function menuSections(): array
+    private function menuSections(array $items): array
     {
         $categoryModel = new Category();
-        $menuItemModel = new MenuItem();
-
         $categories = $categoryModel->all();
-        $items = $menuItemModel->allForAdmin();
         $itemsByCategoryId = [];
 
         foreach ($items as $item) {
@@ -207,10 +289,12 @@ class AdminController extends Controller
         $sections = [];
         foreach ($categories as $category) {
             $categoryId = (int) $category['id'];
-            $sections[] = [
-                'category' => $category,
-                'items' => $itemsByCategoryId[$categoryId] ?? [],
-            ];
+            if (!empty($itemsByCategoryId[$categoryId])) {
+                $sections[] = [
+                    'category' => $category,
+                    'items' => $itemsByCategoryId[$categoryId],
+                ];
+            }
         }
 
         return $sections;
@@ -263,47 +347,130 @@ class AdminController extends Controller
     {
         $this->requireAdmin();
 
-        $menuItemModel = new MenuItem();
-        $messageModel = new Message();
-        $orderModel = new Order();
-        $customerModel = new Customer();
-        $reviewModel = new ProductReview();
-        $liveChatModel = new LiveChat();
-        $promotionModel = new Promotion();
-        $allOrders = $orderModel->all();
-
-        $totalRevenue = 0;
+        $menuCount = 0;
+        $messageCount = 0;
+        $newMessageCount = 0;
+        $orderCount = 0;
         $newOrdersCount = 0;
-        foreach ($allOrders as $order) {
-            if (($order['status'] ?? '') === 'completed') {
-                $totalRevenue += (int) $order['total_amount'];
+        $totalRevenue = 0;
+        $customerCount = 0;
+        $latestOrders = [];
+        $latestMessages = [];
+        $featuredItems = [];
+        $bestSellingItems = [];
+        $topPotentialCustomers = [];
+        $activePromotionCount = 0;
+        $pendingReviewCount = 0;
+        $unreadLiveChatCount = 0;
+
+        try {
+            $menuItemModel = new MenuItem();
+            $messageModel = new Message();
+            $orderModel = new Order();
+            $customerModel = new Customer();
+            $allOrders = $orderModel->all();
+
+            foreach ($allOrders as $order) {
+                if (($order['status'] ?? '') === 'completed') {
+                    $totalRevenue += (int) $order['total_amount'];
+                }
+
+                if (($order['status'] ?? '') === 'pending') {
+                    $newOrdersCount++;
+                }
             }
 
-            if (($order['status'] ?? '') === 'pending') {
-                $newOrdersCount++;
-            }
+            $menuCount = $menuItemModel->countAll();
+            $messageCount = $messageModel->countAll();
+            $newMessageCount = $messageModel->countNew();
+            $orderCount = count($allOrders);
+            $customerCount = $customerModel->countAll();
+            $latestOrders = array_slice($allOrders, 0, 5);
+            $latestMessages = $messageModel->latest(5);
+            $featuredItems = $menuItemModel->featured(6);
+            $bestSellingItems = $menuItemModel->bestSelling(6);
+            $topPotentialCustomers = $customerModel->topPotential(5);
+        } catch (Throwable $featureError) {
+            $this->logAdminFeatureError($featureError);
+        }
+
+        try {
+            $activePromotionCount = count(array_filter(
+                (new Promotion())->allForAdmin(),
+                static fn(array $promotion): bool => (int) ($promotion['is_active'] ?? 0) === 1
+            ));
+        } catch (Throwable $featureError) {
+            $this->logAdminFeatureError($featureError);
+        }
+
+        try {
+            $pendingReviewCount = count((new ProductReview())->allForAdmin('pending'));
+        } catch (Throwable $featureError) {
+            $this->logAdminFeatureError($featureError);
+        }
+
+        try {
+            $unreadLiveChatCount = (new LiveChat())->countUnreadForAdmin();
+        } catch (Throwable $featureError) {
+            $this->logAdminFeatureError($featureError);
         }
 
         $this->render('admin/dashboard', [
             'settings' => $this->siteSettings(),
-            'menuCount' => $menuItemModel->countAll(),
-            'messageCount' => $messageModel->countAll(),
-            'newMessageCount' => $messageModel->countNew(),
-            'orderCount' => count($allOrders),
+            'menuCount' => $menuCount,
+            'messageCount' => $messageCount,
+            'newMessageCount' => $newMessageCount,
+            'orderCount' => $orderCount,
             'newOrdersCount' => $newOrdersCount,
             'totalRevenue' => $totalRevenue,
-            'customerCount' => $customerModel->countAll(),
-            'latestOrders' => array_slice($allOrders, 0, 5),
-            'latestMessages' => $messageModel->latest(5),
-            'featuredItems' => $menuItemModel->featured(6),
-            'bestSellingItems' => $menuItemModel->bestSelling(6),
-            'topPotentialCustomers' => $customerModel->topPotential(5),
-            'activePromotionCount' => count(array_filter(
-                $promotionModel->allForAdmin(),
-                static fn(array $promotion): bool => (int) ($promotion['is_active'] ?? 0) === 1
-            )),
-            'pendingReviewCount' => count($reviewModel->allForAdmin('pending')),
-            'unreadLiveChatCount' => $liveChatModel->countUnreadForAdmin(),
+            'customerCount' => $customerCount,
+            'latestOrders' => $latestOrders,
+            'latestMessages' => $latestMessages,
+            'featuredItems' => $featuredItems,
+            'bestSellingItems' => $bestSellingItems,
+            'topPotentialCustomers' => $topPotentialCustomers,
+            'activePromotionCount' => $activePromotionCount,
+            'pendingReviewCount' => $pendingReviewCount,
+            'unreadLiveChatCount' => $unreadLiveChatCount,
+        ], 'admin');
+    }
+
+    public function menu(): void
+    {
+        $this->requireAdmin();
+
+        $menuItemModel = new MenuItem();
+        $totalItems = 0;
+        $currentPage = $this->requestedMenuPage();
+        $perPage = self::MENU_ITEMS_PER_PAGE;
+        $totalPages = 1;
+        $visibleFrom = 0;
+        $visibleTo = 0;
+        $menuSections = [];
+
+        try {
+            $totalItems = $menuItemModel->countAll();
+            $totalPages = max(1, (int) ceil($totalItems / $perPage));
+            $currentPage = min($currentPage, $totalPages);
+            $offset = ($currentPage - 1) * $perPage;
+            $items = $totalItems > 0 ? $menuItemModel->allForAdminPaginated($offset, $perPage) : [];
+            $menuSections = $this->menuSections($items);
+            $visibleFrom = $totalItems > 0 ? $offset + 1 : 0;
+            $visibleTo = $totalItems > 0 ? min($offset + count($items), $totalItems) : 0;
+        } catch (Throwable $featureError) {
+            $this->logAdminFeatureError($featureError);
+        }
+
+        $this->render('admin/menu', [
+            'settings' => $this->siteSettings(),
+            'categories' => (new Category())->all(),
+            'menuSections' => $menuSections,
+            'currentPage' => $currentPage,
+            'totalPages' => $totalPages,
+            'totalItems' => $totalItems,
+            'perPage' => $perPage,
+            'visibleFrom' => $visibleFrom,
+            'visibleTo' => $visibleTo,
         ], 'admin');
     }
 
@@ -311,9 +478,16 @@ class AdminController extends Controller
     {
         $this->requireAdmin();
 
-        $allOrders = (new Order())->all();
+        $allOrders = [];
         $searchQuery = trim($_GET['search'] ?? '');
         $searchDate = trim($_GET['date'] ?? '');
+
+        try {
+            $orderModel = new Order();
+            $allOrders = $this->decorateOrdersWithItems($orderModel->all(), $orderModel);
+        } catch (Throwable $featureError) {
+            $this->logAdminFeatureError($featureError);
+        }
 
         $this->render('admin/orders', [
             'settings' => $this->siteSettings(),
@@ -397,65 +571,30 @@ class AdminController extends Controller
         $this->redirectTo('admin/orders');
     }
 
-    public function revenue(): void
-    {
-        $this->requireAdmin();
-
-        $allOrders = (new Order())->all();
-        $filterDate = trim($_GET['date'] ?? '');
-        $filterMonth = trim($_GET['month'] ?? '');
-
-        if ($filterDate === '' && $filterMonth === '') {
-            $filterMonth = date('Y-m');
-        }
-
-        $filteredOrders = $this->filteredCompletedOrders($allOrders, $filterDate, $filterMonth);
-        $totalRevenue = 0;
-        foreach ($filteredOrders as $order) {
-            $totalRevenue += (int) $order['total_amount'];
-        }
-
-        $this->render('admin/revenue', [
-            'settings' => $this->siteSettings(),
-            'orders' => $filteredOrders,
-            'totalRevenue' => $totalRevenue,
-            'filterDate' => $filterDate,
-            'filterMonth' => $filterMonth,
-        ], 'admin');
-    }
-
-    public function menu(): void
-    {
-        $this->requireAdmin();
-
-        $categoryModel = new Category();
-        $menuItemModel = new MenuItem();
-
-        $this->render('admin/menu', [
-            'settings' => $this->siteSettings(),
-            'categories' => $categoryModel->all(),
-            'items' => $menuItemModel->allForAdmin(),
-            'menuSections' => $this->menuSections(),
-        ], 'admin');
-    }
-
     public function messages(): void
     {
         $this->requireAdmin();
 
         $messageModel = new Message();
-        $liveChatModel = new LiveChat();
-        $threads = $liveChatModel->threadsForAdmin();
-        $selectedThreadId = (int) ($_GET['thread'] ?? ($threads[0]['id'] ?? 0));
+        $threads = [];
         $activeThread = null;
         $chatMessages = [];
+        $selectedThreadId = 0;
 
-        if ($selectedThreadId > 0) {
-            $activeThread = $liveChatModel->findThreadById($selectedThreadId);
-            if ($activeThread !== null) {
-                $liveChatModel->markReadForViewer($selectedThreadId, 'admin');
-                $chatMessages = $liveChatModel->messagesForThread($selectedThreadId);
+        try {
+            $liveChatModel = new LiveChat();
+            $threads = $liveChatModel->threadsForAdmin();
+            $selectedThreadId = (int) ($_GET['thread'] ?? ($threads[0]['id'] ?? 0));
+
+            if ($selectedThreadId > 0) {
+                $activeThread = $liveChatModel->findThreadById($selectedThreadId);
+                if ($activeThread !== null) {
+                    $liveChatModel->markReadForViewer($selectedThreadId, 'admin');
+                    $chatMessages = $liveChatModel->messagesForThread($selectedThreadId);
+                }
             }
+        } catch (Throwable $featureError) {
+            $this->logAdminFeatureError($featureError);
         }
 
         $this->render('admin/messages', [
@@ -467,231 +606,29 @@ class AdminController extends Controller
         ], 'admin');
     }
 
-    public function reviews(): void
+    public function revenue(): void
     {
         $this->requireAdmin();
 
-        $status = trim((string) ($_GET['status'] ?? ''));
+        $orderModel = new Order();
+        $allOrders = $this->decorateOrdersWithItems($orderModel->all(), $orderModel);
+        $filterDate = trim((string) ($_GET['date'] ?? ''));
+        $filterMonth = trim((string) ($_GET['month'] ?? ''));
 
-        $this->render('admin/reviews', [
+        if ($filterDate === '' && $filterMonth === '') {
+            $filterMonth = date('Y-m');
+        }
+
+        $orders = $this->filteredCompletedOrders($allOrders, $filterDate, $filterMonth);
+        $totalRevenue = array_sum(array_map(static fn(array $order): int => (int) ($order['total_amount'] ?? 0), $orders));
+
+        $this->render('admin/revenue', [
             'settings' => $this->siteSettings(),
-            'reviews' => (new ProductReview())->allForAdmin($status),
-            'currentStatus' => $status,
+            'orders' => $orders,
+            'filterDate' => $filterDate,
+            'filterMonth' => $filterMonth,
+            'totalRevenue' => $totalRevenue,
         ], 'admin');
-    }
-
-    public function settings(): void
-    {
-        $this->requireAdmin();
-
-        $settings = $this->siteSettings();
-
-        $this->render('admin/settings', [
-            'settings' => $settings,
-            'defaultHomeMedia' => $this->defaultHomeMedia(),
-            'spotlightCandidates' => $this->spotlightCandidates(),
-            'defaultSpotlightMap' => $this->defaultKeyValueMap($this->defaultSpotlightIds(), 'home_spotlight_item_'),
-            'defaultCartRecommendationMap' => $this->defaultKeyValueMap($this->defaultCartRecommendationIds(), 'cart_recommend_item_'),
-            'defaultHomeDrinkMap' => $this->defaultKeyValueMap($this->defaultHomeDrinkIds(), 'home_drink_item_'),
-            'spotlightSettingKeys' => $this->settingKeysByPrefix($settings, 'home_spotlight_item_', 4, false),
-            'cartRecommendationKeys' => $this->settingKeysByPrefix($settings, 'cart_recommend_item_', 4, false),
-            'homeDrinkKeys' => $this->settingKeysByPrefix($settings, 'home_drink_item_', 5, false),
-            'bannerSlideKeys' => $this->settingKeysByPrefix($settings, 'home_banner_slide_', 3, false),
-            'promotions' => (new Promotion())->allForAdmin(),
-        ], 'admin');
-    }
-
-    public function storeMenuItem(): void
-    {
-        $this->requireAdmin();
-
-        if (trim((string) ($_POST['name'] ?? '')) === '' || trim((string) ($_POST['price'] ?? '')) === '') {
-            Session::flash('error', 'Tên món và giá bán là bắt buộc.');
-            $this->redirectTo('admin/menu');
-        }
-
-        $payload = $_POST;
-        $payload['image_url'] = $this->handleFileUpload('image_file', trim((string) ($_POST['image_url'] ?? '')));
-
-        (new MenuItem())->create($payload);
-        Session::flash('success', 'Đã thêm món mới vào thực đơn.');
-        $this->redirectTo('admin/menu');
-    }
-
-    public function updateMenuItem(): void
-    {
-        $this->requireAdmin();
-
-        $id = (int) ($_POST['id'] ?? 0);
-        if ($id <= 0) {
-            Session::flash('error', 'Không tìm thấy món cần cập nhật.');
-            $this->redirectTo('admin/menu');
-        }
-
-        $payload = $_POST;
-        $payload['image_url'] = $this->handleFileUpload('image_file', trim((string) ($_POST['image_url'] ?? '')));
-
-        (new MenuItem())->update($id, $payload);
-        Session::flash('success', 'Đã cập nhật món thành công.');
-        $this->redirectTo('admin/menu');
-    }
-
-    public function deleteMenuItem(): void
-    {
-        $this->requireAdmin();
-
-        $id = (int) ($_POST['id'] ?? 0);
-        if ($id <= 0) {
-            Session::flash('error', 'Không tìm thấy món cần xóa.');
-            $this->redirectTo('admin/menu');
-        }
-
-        (new MenuItem())->delete($id);
-        Session::flash('success', 'Đã xóa món khỏi thực đơn.');
-        $this->redirectTo('admin/menu');
-    }
-
-    public function updateSettings(): void
-    {
-        $this->requireAdmin();
-
-        $settingsModel = new Setting();
-        $currentSettings = $settingsModel->all();
-
-        $fixedKeys = [
-            'site_name',
-            'tagline',
-            'address',
-            'map_query',
-            'hotline',
-            'opening_hours',
-            'shopeefood_url',
-            'about_text',
-            'bank_name',
-            'bank_bin',
-            'bank_account_number',
-            'bank_account_holder',
-            'bank_transfer_note',
-            'seo_default_keywords',
-        ];
-
-        $payload = [];
-        foreach ($fixedKeys as $key) {
-            $payload[$key] = trim((string) ($_POST[$key] ?? ''));
-        }
-
-        foreach (['home_spotlight_item_', 'cart_recommend_item_', 'home_drink_item_'] as $prefix) {
-            $settingKeys = array_unique(array_merge(
-                $this->settingKeysByPrefix($currentSettings, $prefix),
-                $this->submittedPostKeysByPrefix($prefix)
-            ));
-
-            foreach ($settingKeys as $key) {
-                $payload[$key] = trim((string) ($_POST[$key] ?? ''));
-            }
-        }
-
-        $bannerSlideKeys = array_unique(array_merge(
-            $this->settingKeysByPrefix($currentSettings, 'home_banner_slide_', 3),
-            $this->submittedPostKeysByPrefix('home_banner_slide_'),
-            $this->submittedFileKeysByPrefix('home_banner_slide_')
-        ));
-
-        foreach ($bannerSlideKeys as $key) {
-            $payload[$key] = $this->handleFileUpload($key . '_file', trim((string) ($_POST[$key] ?? '')));
-        }
-
-        foreach ([
-            'home_signature_image',
-            'contact_hero_image',
-            'home_category_card_bread_image',
-            'home_category_card_pan_image',
-            'home_category_card_drink_image',
-        ] as $imageKey) {
-            $payload[$imageKey] = $this->handleFileUpload($imageKey . '_file', trim((string) ($_POST[$imageKey] ?? '')));
-        }
-
-        $settingsModel->updateMany($payload);
-        Session::flash('success', 'Đã cập nhật thông tin website, món hiển thị và ảnh banner.');
-        $this->redirectTo('admin/settings');
-    }
-
-    public function storePromotion(): void
-    {
-        $this->requireAdmin();
-
-        $title = trim((string) ($_POST['title'] ?? ''));
-        $content = trim((string) ($_POST['content'] ?? ''));
-        $targetTier = trim((string) ($_POST['target_tier'] ?? 'all'));
-        $discountPercent = max(0, (int) ($_POST['discount_percent'] ?? 0));
-        $discountAmount = max(0, (int) ($_POST['discount_amount'] ?? 0));
-
-        if ($title === '' || $content === '') {
-            Session::flash('error', 'Tiêu đề và nội dung khuyến mãi là bắt buộc.');
-            $this->redirectTo('admin/settings');
-        }
-
-        if ($discountPercent <= 0 && $discountAmount <= 0) {
-            Session::flash('error', 'Cần nhập ít nhất một giá trị giảm phần trăm hoặc giảm tiền.');
-            $this->redirectTo('admin/settings');
-        }
-
-        $promotionModel = new Promotion();
-        $promotionId = $promotionModel->create([
-            'title' => $title,
-            'content' => $content,
-            'target_tier' => $targetTier,
-            'discount_percent' => $discountPercent,
-            'discount_amount' => $discountAmount,
-            'coupon_code' => trim((string) ($_POST['coupon_code'] ?? '')),
-            'expires_at' => trim((string) ($_POST['expires_at'] ?? '')),
-            'is_active' => !empty($_POST['is_active']) ? 1 : 0,
-        ]);
-
-        $promotion = $promotionModel->findById($promotionId);
-        if ($promotion !== null && !empty($_POST['send_email'])) {
-            $recipients = (new Customer())->recipientsForPromotion((string) ($promotion['target_tier'] ?? 'all'));
-            $settings = $this->siteSettings();
-
-            foreach ($recipients as $recipient) {
-                EmailService::sendPromotionAnnouncement($recipient, $promotion, $settings);
-            }
-        }
-
-        Session::flash('success', 'Đã tạo chương trình khuyến mãi mới.');
-        $this->redirectTo('admin/settings');
-    }
-
-    public function deletePromotion(): void
-    {
-        $this->requireAdmin();
-
-        $promotionId = (int) ($_POST['promotion_id'] ?? 0);
-        if ($promotionId <= 0) {
-            Session::flash('error', 'Không tìm thấy khuyến mãi cần xóa.');
-            $this->redirectTo('admin/settings');
-        }
-
-        (new Promotion())->delete($promotionId);
-        Session::flash('success', 'Đã xóa chương trình khuyến mãi.');
-        $this->redirectTo('admin/settings');
-    }
-
-    public function updateReviewStatus(): void
-    {
-        $this->requireAdmin();
-
-        $reviewId = (int) ($_POST['review_id'] ?? 0);
-        $status = trim((string) ($_POST['status'] ?? ''));
-
-        if ($reviewId <= 0 || !in_array($status, ['pending', 'approved', 'rejected'], true)) {
-            Session::flash('error', 'Không thể cập nhật trạng thái đánh giá.');
-            $this->redirectTo('admin/reviews');
-        }
-
-        (new ProductReview())->updateStatus($reviewId, $status);
-        Session::flash('success', 'Đã cập nhật trạng thái đánh giá.');
-        $this->redirectTo('admin/reviews');
     }
 
     public function sendLiveChatMessage(): void
@@ -702,7 +639,7 @@ class AdminController extends Controller
         $message = trim((string) ($_POST['message'] ?? ''));
 
         if ($threadId <= 0 || $message === '') {
-            Session::flash('error', 'Vui lòng chọn đúng cuộc trò chuyện và nhập nội dung phản hồi.');
+            Session::flash('error', 'Nội dung phản hồi chưa hợp lệ.');
             $this->redirectTo('admin/messages');
         }
 
@@ -713,15 +650,11 @@ class AdminController extends Controller
             $this->redirectTo('admin/messages');
         }
 
-        if (($thread['status'] ?? 'open') === 'closed') {
-            $liveChatModel->reopenThread($threadId);
-        }
-
         $liveChatModel->addMessage(
             $threadId,
             'admin',
-            !empty($_SESSION['admin_id']) ? (int) $_SESSION['admin_id'] : null,
-            (string) ($_SESSION['admin_name'] ?? 'RoyalBread Admin'),
+            (int) ($_SESSION['admin_id'] ?? 0) > 0 ? (int) $_SESSION['admin_id'] : null,
+            trim((string) ($_SESSION['admin_name'] ?? 'Admin')),
             $message
         );
 
@@ -737,11 +670,16 @@ class AdminController extends Controller
         $action = trim((string) ($_POST['action'] ?? ''));
 
         if ($threadId <= 0 || !in_array($action, ['close', 'reopen'], true)) {
-            Session::flash('error', 'Không thể cập nhật cuộc trò chuyện.');
+            Session::flash('error', 'Không thể cập nhật trạng thái chat.');
             $this->redirectTo('admin/messages');
         }
 
         $liveChatModel = new LiveChat();
+        if ($liveChatModel->findThreadById($threadId) === null) {
+            Session::flash('error', 'Không tìm thấy cuộc trò chuyện cần cập nhật.');
+            $this->redirectTo('admin/messages');
+        }
+
         if ($action === 'close') {
             $liveChatModel->closeThread($threadId);
             Session::flash('success', 'Đã đóng cuộc trò chuyện.');
@@ -753,24 +691,230 @@ class AdminController extends Controller
         $this->redirectTo('admin/messages?thread=' . $threadId);
     }
 
+    public function reviews(): void
+    {
+        $this->requireAdmin();
+
+        $status = trim((string) ($_GET['status'] ?? ''));
+        $reviews = [];
+        $currentPage = $this->requestedReviewPage();
+        $totalReviews = 0;
+        $totalPages = 1;
+        $visibleFrom = 0;
+        $visibleTo = 0;
+
+        try {
+            $reviewModel = new ProductReview();
+            $totalReviews = $reviewModel->countAllForAdmin($status);
+            $totalPages = max(1, (int) ceil($totalReviews / self::REVIEW_ITEMS_PER_PAGE));
+            $currentPage = min($currentPage, $totalPages);
+            $offset = ($currentPage - 1) * self::REVIEW_ITEMS_PER_PAGE;
+            $reviews = $reviewModel->allForAdminPaginated($status, self::REVIEW_ITEMS_PER_PAGE, $offset);
+            $visibleFrom = $totalReviews > 0 ? $offset + 1 : 0;
+            $visibleTo = $totalReviews > 0 ? min($offset + count($reviews), $totalReviews) : 0;
+        } catch (Throwable $featureError) {
+            $this->logAdminFeatureError($featureError);
+        }
+
+        $this->render('admin/reviews', [
+            'settings' => $this->siteSettings(),
+            'reviews' => $reviews,
+            'currentStatus' => $status,
+            'currentPage' => $currentPage,
+            'totalPages' => $totalPages,
+            'totalReviews' => $totalReviews,
+            'visibleFrom' => $visibleFrom,
+            'visibleTo' => $visibleTo,
+        ], 'admin');
+    }
+
+    private function updateReviewStatusInternal(): void
+    {
+        $this->requireAdmin();
+
+        $reviewId = (int) ($_POST['review_id'] ?? $_POST['id'] ?? 0);
+        $status = trim((string) ($_POST['status'] ?? ''));
+        $page = max(1, (int) ($_POST['page'] ?? 1));
+        $currentStatus = trim((string) ($_POST['current_status'] ?? ''));
+
+        if ($reviewId <= 0 || !in_array($status, ['pending', 'approved', 'rejected'], true)) {
+            Session::flash('error', 'Cập nhật đánh giá thất bại.');
+            $this->redirectToAdminReviewsPage($page, $currentStatus);
+            return;
+        }
+
+        $reviewModel = new ProductReview();
+
+        try {
+            $reviewModel->updateStatus($reviewId, $status);
+            Session::flash('success', 'Đã cập nhật trạng thái đánh giá.');
+        } catch (Throwable $featureError) {
+            $this->logAdminFeatureError($featureError);
+            Session::flash('error', 'Không thể cập nhật đánh giá lúc này.');
+        }
+
+        $this->redirectToAdminReviewsPage($page, $currentStatus);
+    }
+
+    public function updateReviewStatus(): void
+    {
+        $this->updateReviewStatusInternal();
+    }
+
+    public function updateReviewsStatus(): void
+    {
+        $this->updateReviewStatusInternal();
+    }
+
+    public function settings(): void
+    {
+        $this->requireAdmin();
+
+        $settings = $this->siteSettings();
+        $promotions = [];
+
+        try {
+            $promotions = (new Promotion())->allForAdmin();
+        } catch (Throwable $featureError) {
+            $this->logAdminFeatureError($featureError);
+        }
+
+        $this->render('admin/settings', [
+            'settings' => $settings,
+            'defaultHomeMedia' => $this->defaultHomeMedia(),
+            'spotlightCandidates' => $this->spotlightCandidates(),
+            'defaultSpotlightMap' => $this->defaultKeyValueMap($this->defaultSpotlightIds(), 'home_spotlight_item_'),
+            'defaultCartRecommendationMap' => $this->defaultKeyValueMap($this->defaultCartRecommendationIds(), 'cart_recommend_item_'),
+            'defaultHomeDrinkMap' => $this->defaultKeyValueMap($this->defaultHomeDrinkIds(), 'home_drink_item_'),
+            'spotlightSettingKeys' => $this->settingKeysByPrefix($settings, 'home_spotlight_item_', 4, false),
+            'cartRecommendationKeys' => $this->settingKeysByPrefix($settings, 'cart_recommend_item_', 4, false),
+            'homeDrinkKeys' => $this->settingKeysByPrefix($settings, 'home_drink_item_', 5, false),
+            'bannerSlideKeys' => $this->settingKeysByPrefix($settings, 'home_banner_slide_', 3, false),
+            'promotions' => $promotions,
+        ], 'admin');
+    }
+
+    public function storeMenuItem(): void
+    {
+        $this->requireAdmin();
+        $page = $this->requestedMenuPage();
+
+        if (trim((string) ($_POST['name'] ?? '')) === '' || trim((string) ($_POST['price'] ?? '')) === '') {
+            Session::flash('error', 'Tên món và giá bán là bắt buộc.');
+            $this->redirectToAdminMenuPage($page);
+        }
+
+        $menuItemModel = new MenuItem();
+        $menuItemModel->create([
+            'category_id' => (int) ($_POST['category_id'] ?? 0),
+            'name' => trim((string) ($_POST['name'] ?? '')),
+            'description' => trim((string) ($_POST['description'] ?? '')),
+            'price' => (int) ($_POST['price'] ?? 0),
+            'image_url' => $this->handleFileUpload('image_file', trim((string) ($_POST['image_url'] ?? ''))),
+            'is_featured' => !empty($_POST['is_featured']) ? 1 : 0,
+            'is_available' => !empty($_POST['is_available']) ? 1 : 0,
+            'sort_order' => (int) ($_POST['sort_order'] ?? 99),
+        ]);
+
+        Session::flash('success', 'Đã thêm món mới.');
+        $this->redirectToAdminMenuPage($page);
+    }
+
+    public function updateMenuItem(): void
+    {
+        $this->requireAdmin();
+        $page = $this->requestedMenuPage();
+        $id = (int) ($_POST['id'] ?? 0);
+
+        if ($id <= 0) {
+            Session::flash('error', 'Không tìm thấy món cần cập nhật.');
+            $this->redirectToAdminMenuPage($page);
+        }
+
+        $menuItemModel = new MenuItem();
+        $existingItem = $menuItemModel->findById($id);
+        if ($existingItem === null) {
+            Session::flash('error', 'Không tìm thấy món cần cập nhật.');
+            $this->redirectToAdminMenuPage($page);
+        }
+
+        if (trim((string) ($_POST['name'] ?? '')) === '' || trim((string) ($_POST['price'] ?? '')) === '') {
+            Session::flash('error', 'Tên món và giá bán là bắt buộc.');
+            $this->redirectToAdminMenuPage($page);
+        }
+
+        $imageUrl = $this->handleFileUpload(
+            'image_file',
+            trim((string) ($_POST['image_url'] ?? (string) ($existingItem['image_url'] ?? '')))
+        );
+
+        $menuItemModel->update($id, [
+            'category_id' => (int) ($_POST['category_id'] ?? $existingItem['category_id'] ?? 0),
+            'name' => trim((string) ($_POST['name'] ?? '')),
+            'description' => trim((string) ($_POST['description'] ?? '')),
+            'price' => (int) ($_POST['price'] ?? 0),
+            'image_url' => $imageUrl,
+            'is_featured' => !empty($_POST['is_featured']) ? 1 : 0,
+            'is_available' => !empty($_POST['is_available']) ? 1 : 0,
+            'sort_order' => (int) ($_POST['sort_order'] ?? 99),
+        ]);
+
+        Session::flash('success', 'Đã cập nhật món.');
+        $this->redirectToAdminMenuPage($page);
+    }
+
+    public function deleteMenuItem(): void
+    {
+        $this->requireAdmin();
+        $page = $this->requestedMenuPage();
+        $id = (int) ($_POST['id'] ?? 0);
+
+        if ($id <= 0) {
+            Session::flash('error', 'Không tìm thấy món cần xóa.');
+            $this->redirectToAdminMenuPage($page);
+        }
+
+        $menuItemModel = new MenuItem();
+        if ($menuItemModel->findById($id) === null) {
+            Session::flash('error', 'Không tìm thấy món cần xóa.');
+            $this->redirectToAdminMenuPage($page);
+        }
+
+        $menuItemModel->delete($id);
+        Session::flash('success', 'Đã xóa món khỏi thực đơn.');
+        $this->redirectToAdminMenuPage($page);
+    }
+
     public function exportOrders(): void
     {
         $this->requireAdmin();
 
-        $allOrders = (new Order())->all();
+        $orderModel = new Order();
+        $allOrders = $this->decorateOrdersWithItems($orderModel->all(), $orderModel);
         $searchQuery = trim($_GET['search'] ?? '');
         $searchDate = trim($_GET['date'] ?? '');
         $filteredOrders = $this->filteredOrders($allOrders, $searchQuery, $searchDate);
 
-        $headers = ['Mã đơn', 'Khách hàng', 'Email', 'Số điện thoại', 'Địa chỉ', 'Thời gian', 'Tổng tiền', 'Phương thức', 'Trạng thái đơn', 'Trạng thái thanh toán', 'Mã đối chiếu'];
+        $headers = ['MÃ£ Ä‘Æ¡n', 'KhÃ¡ch hÃ ng', 'Email', 'Sá»‘ Ä‘iá»‡n thoáº¡i', 'Äá»‹a chá»‰', 'Thá»i gian', 'Tá»•ng tiá»n', 'PhÆ°Æ¡ng thá»©c', 'Tráº¡ng thÃ¡i Ä‘Æ¡n', 'Tráº¡ng thÃ¡i thanh toÃ¡n', 'MÃ£ Ä‘á»‘i chiáº¿u'];
         $rows = [];
+        $headers = ['Ma don', 'Khach hang', 'Email', 'So dien thoai', 'Mon da dat', 'Dia chi', 'Thoi gian', 'Tong tien', 'Phuong thuc', 'Trang thai don', 'Trang thai thanh toan', 'Ma doi chieu'];
 
         foreach ($filteredOrders as $order) {
+            $itemsSummary = [];
+            foreach (($order['items'] ?? []) as $item) {
+                $itemsSummary[] = sprintf(
+                    '%s x%d',
+                    (string) ($item['menu_item_name'] ?? 'Mon'),
+                    (int) ($item['quantity'] ?? 0)
+                );
+            }
+
             $rows[] = [
                 '#' . $order['id'],
                 $order['customer_name'],
                 $order['customer_email'] ?? '',
                 $order['phone'],
+                implode('; ', $itemsSummary),
                 $order['address'],
                 date('d/m/Y H:i', strtotime((string) $order['created_at'])),
                 (int) $order['total_amount'],
@@ -786,7 +930,7 @@ class AdminController extends Controller
             $headers,
             $rows,
             $this->requestedExportFormat(),
-            'Danh sách đơn hàng RoyalBread'
+            'Danh sÃ¡ch Ä‘Æ¡n hÃ ng RoyalBread'
         );
     }
 
@@ -803,7 +947,7 @@ class AdminController extends Controller
         }
 
         $filteredOrders = $this->filteredCompletedOrders($allOrders, $filterDate, $filterMonth);
-        $headers = ['Mã đơn', 'Khách hàng', 'Email', 'Số điện thoại', 'Thời gian', 'Phương thức', 'Thành tiền', 'Giảm giá', 'Thanh toán'];
+        $headers = ['MÃ£ Ä‘Æ¡n', 'KhÃ¡ch hÃ ng', 'Email', 'Sá»‘ Ä‘iá»‡n thoáº¡i', 'Thá»i gian', 'PhÆ°Æ¡ng thá»©c', 'ThÃ nh tiá»n', 'Giáº£m giÃ¡', 'Thanh toÃ¡n'];
         $rows = [];
 
         foreach ($filteredOrders as $order) {
@@ -832,7 +976,7 @@ class AdminController extends Controller
             $headers,
             $rows,
             $this->requestedExportFormat(),
-            'Báo cáo doanh thu RoyalBread'
+            'BÃ¡o cÃ¡o doanh thu RoyalBread'
         );
     }
 
@@ -842,7 +986,7 @@ class AdminController extends Controller
 
         $searchQuery = trim($_GET['search'] ?? '');
         $customers = (new Customer())->allWithStats($searchQuery);
-        $headers = ['ID khách', 'Họ tên', 'Username', 'Số điện thoại', 'Email', 'Ngày đăng ký', 'Số đơn hàng', 'Đã chi tiêu', 'Hạng thành viên', 'Điểm tiềm năng', 'Phân nhóm', 'Giá trị đơn TB', 'Lần mua gần nhất'];
+        $headers = ['ID khÃ¡ch', 'Há» tÃªn', 'Username', 'Sá»‘ Ä‘iá»‡n thoáº¡i', 'Email', 'NgÃ y Ä‘Äƒng kÃ½', 'Sá»‘ Ä‘Æ¡n hÃ ng', 'ÄÃ£ chi tiÃªu', 'Háº¡ng thÃ nh viÃªn', 'Äiá»ƒm tiá»m nÄƒng', 'PhÃ¢n nhÃ³m', 'GiÃ¡ trá»‹ Ä‘Æ¡n TB', 'Láº§n mua gáº§n nháº¥t'];
         $rows = [];
 
         foreach ($customers as $customer) {
@@ -870,7 +1014,7 @@ class AdminController extends Controller
             $headers,
             $rows,
             $this->requestedExportFormat(),
-            'Danh sách khách hàng RoyalBread'
+            'Danh sÃ¡ch khÃ¡ch hÃ ng RoyalBread'
         );
     }
 }

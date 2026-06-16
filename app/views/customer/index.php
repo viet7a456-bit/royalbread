@@ -38,6 +38,25 @@ $extractInitials = static function (string $fullName): string {
 };
 
 $customerInitials = $extractInitials($customerName);
+$customerReviewsPage = max(1, (int) ($customerReviewsPage ?? 1));
+$customerReviewsTotal = max(0, (int) ($customerReviewsTotal ?? count($customerReviews)));
+$customerReviewsTotalPages = max(1, (int) ($customerReviewsTotalPages ?? 1));
+$customerReviewsVisibleFrom = max(0, (int) ($customerReviewsVisibleFrom ?? 0));
+$customerReviewsVisibleTo = max(0, (int) ($customerReviewsVisibleTo ?? 0));
+
+$customerReviewPaginationStart = max(1, $customerReviewsPage - 2);
+$customerReviewPaginationEnd = min($customerReviewsTotalPages, $customerReviewsPage + 2);
+if (($customerReviewPaginationEnd - $customerReviewPaginationStart) < 4) {
+    if ($customerReviewPaginationStart === 1) {
+        $customerReviewPaginationEnd = min($customerReviewsTotalPages, 5);
+    } elseif ($customerReviewPaginationEnd === $customerReviewsTotalPages) {
+        $customerReviewPaginationStart = max(1, $customerReviewsTotalPages - 4);
+    }
+}
+
+$buildCustomerReviewPageLink = static function (int $page): string {
+    return url('account?review_page=' . max(1, $page) . '#danh-gia');
+};
 ?>
 
 <?php if ($customer === null): ?>
@@ -338,7 +357,7 @@ $customerInitials = $extractInitials($customerName);
                                 <p class="section-kicker">Đánh giá sản phẩm</p>
                                 <h2>Viết review cho món đã mua</h2>
                             </div>
-                            <span class="customer-section__meta"><?= e((string) count($customerReviews)) ?> review</span>
+                            <span class="customer-section__meta"><?= e((string) $customerReviewsTotal) ?> review</span>
                         </div>
 
                         <div class="customer-review-layout">
@@ -352,6 +371,9 @@ $customerInitials = $extractInitials($customerName);
                                                 <div>
                                                     <strong><?= e($reviewItemName) ?></strong>
                                                     <span>Đơn #<?= e((string) $item['order_id']) ?></span>
+                                                    <?php if (trim((string) ($item['review_status'] ?? '')) !== ''): ?>
+                                                        <small>Trạng thái review: <?= e((string) $item['review_status']) ?></small>
+                                                    <?php endif; ?>
                                                 </div>
                                             </div>
 
@@ -359,25 +381,26 @@ $customerInitials = $extractInitials($customerName);
                                                 <?= csrf_field() ?>
                                                 <input type="hidden" name="menu_item_id" value="<?= e((string) $item['menu_item_id']) ?>">
                                                 <input type="hidden" name="order_id" value="<?= e((string) $item['order_id']) ?>">
+                                                <?php $selectedRating = (int) ($item['rating'] ?? $item['existing_rating'] ?? 5); ?>
                                                 <label>
                                                     Điểm đánh giá
                                                     <select name="rating" required>
-                                                        <option value="5" <?= (int) ($item['existing_rating'] ?? 5) === 5 ? 'selected' : '' ?>>5 sao</option>
-                                                        <option value="4" <?= (int) ($item['existing_rating'] ?? 0) === 4 ? 'selected' : '' ?>>4 sao</option>
-                                                        <option value="3" <?= (int) ($item['existing_rating'] ?? 0) === 3 ? 'selected' : '' ?>>3 sao</option>
-                                                        <option value="2" <?= (int) ($item['existing_rating'] ?? 0) === 2 ? 'selected' : '' ?>>2 sao</option>
-                                                        <option value="1" <?= (int) ($item['existing_rating'] ?? 0) === 1 ? 'selected' : '' ?>>1 sao</option>
+                                                        <option value="5" <?= $selectedRating === 5 ? 'selected' : '' ?>>5 sao</option>
+                                                        <option value="4" <?= $selectedRating === 4 ? 'selected' : '' ?>>4 sao</option>
+                                                        <option value="3" <?= $selectedRating === 3 ? 'selected' : '' ?>>3 sao</option>
+                                                        <option value="2" <?= $selectedRating === 2 ? 'selected' : '' ?>>2 sao</option>
+                                                        <option value="1" <?= $selectedRating === 1 ? 'selected' : '' ?>>1 sao</option>
                                                     </select>
                                                 </label>
                                                 <label>
                                                     Tiêu đề ngắn
-                                                    <input type="text" name="review_title" value="<?= e($item['existing_title'] ?? '') ?>" placeholder="Ví dụ: Món ăn rất đầy đặn">
+                                                    <input type="text" name="review_title" value="<?= e($item['review_title'] ?? $item['existing_title'] ?? '') ?>" placeholder="Ví dụ: Món ăn rất đầy đặn">
                                                 </label>
                                                 <label>
                                                     Nhận xét chi tiết
-                                                    <textarea name="review_comment" rows="3" placeholder="Chia sẻ cảm nhận thật của bạn..." required><?= e($item['existing_comment'] ?? '') ?></textarea>
+                                                    <textarea name="review_comment" rows="3" placeholder="Chia sẻ cảm nhận thật của bạn..." required><?= e($item['review_comment'] ?? $item['existing_comment'] ?? '') ?></textarea>
                                                 </label>
-                                                <button type="submit" class="btn btn-primary">Gửi đánh giá</button>
+                                                <button type="submit" class="btn btn-primary"><?= !empty($item['review_id']) ? 'Cập nhật đánh giá' : 'Gửi đánh giá' ?></button>
                                             </form>
                                         </article>
                                     <?php endforeach; ?>
@@ -390,14 +413,64 @@ $customerInitials = $extractInitials($customerName);
                             </div>
 
                             <div class="customer-note-list">
-                                <?php foreach (array_slice($customerReviews, 0, 5) as $review): ?>
-                                    <article>
-                                        <strong><?= e($review['menu_item_name'] ?? 'Món đã mua') ?></strong>
-                                        <p><?= e(str_repeat('★', max(1, (int) ($review['rating'] ?? 0)))) ?> • <?= e($review['status']) ?></p>
-                                        <p><?= e(trim((string) ($review['review_title'] ?? '')) !== '' ? $review['review_title'] : $review['review_comment']) ?></p>
-                                    </article>
-                                <?php endforeach; ?>
+                                <?php if ($customerReviews !== []): ?>
+                                    <?php foreach ($customerReviews as $review): ?>
+                                        <article>
+                                            <strong><?= e($review['menu_item_name'] ?? 'Món đã mua') ?></strong>
+                                            <p><?= e(str_repeat('★', max(1, (int) ($review['rating'] ?? 0)))) ?> • <?= e($review['status']) ?></p>
+                                            <p><?= e(trim((string) ($review['review_title'] ?? '')) !== '' ? $review['review_title'] : $review['review_comment']) ?></p>
+                                        </article>
+                                    <?php endforeach; ?>
+                                <?php else: ?>
+                                    <div class="customer-empty">
+                                        <strong>Bạn chưa có review nào được ghi nhận.</strong>
+                                        <p>Khi admin duyệt đánh giá, lịch sử sẽ hiển thị ở đây.</p>
+                                    </div>
+                                <?php endif; ?>
                             </div>
+
+                            <?php if ($customerReviewsTotal > 0): ?>
+                                <div class="mn-pagination-section">
+                                    <div class="mn-pagination__summary">
+                                        <div class="mn-pagination__summary-copy">
+                                            <strong>Lịch sử đánh giá của bạn</strong>
+                                            <span>Đang hiển thị <?= e((string) $customerReviewsVisibleFrom) ?>-<?= e((string) $customerReviewsVisibleTo) ?> / <?= e((string) $customerReviewsTotal) ?> review</span>
+                                        </div>
+                                    </div>
+
+                                    <nav class="mn-pagination" aria-label="Phân trang đánh giá khách hàng">
+                                        <?php if ($customerReviewsPage > 1): ?>
+                                            <a class="mn-pagination__link mn-pagination__link--nav" href="<?= e($buildCustomerReviewPageLink(1)) ?>" aria-label="Trang đầu">&laquo;</a>
+                                            <a class="mn-pagination__link mn-pagination__link--nav" href="<?= e($buildCustomerReviewPageLink($customerReviewsPage - 1)) ?>" aria-label="Trang trước">&lsaquo;</a>
+                                        <?php endif; ?>
+
+                                        <?php if ($customerReviewPaginationStart > 1): ?>
+                                            <a class="mn-pagination__link" href="<?= e($buildCustomerReviewPageLink(1)) ?>">1</a>
+                                            <?php if ($customerReviewPaginationStart > 2): ?>
+                                                <span class="mn-pagination__ellipsis">…</span>
+                                            <?php endif; ?>
+                                        <?php endif; ?>
+
+                                        <?php for ($page = $customerReviewPaginationStart; $page <= $customerReviewPaginationEnd; $page++): ?>
+                                            <a class="mn-pagination__link <?= $page === $customerReviewsPage ? 'is-active' : '' ?>" href="<?= e($buildCustomerReviewPageLink($page)) ?>">
+                                                <?= e((string) $page) ?>
+                                            </a>
+                                        <?php endfor; ?>
+
+                                        <?php if ($customerReviewPaginationEnd < $customerReviewsTotalPages): ?>
+                                            <?php if ($customerReviewPaginationEnd < ($customerReviewsTotalPages - 1)): ?>
+                                                <span class="mn-pagination__ellipsis">…</span>
+                                            <?php endif; ?>
+                                            <a class="mn-pagination__link" href="<?= e($buildCustomerReviewPageLink($customerReviewsTotalPages)) ?>"><?= e((string) $customerReviewsTotalPages) ?></a>
+                                        <?php endif; ?>
+
+                                        <?php if ($customerReviewsPage < $customerReviewsTotalPages): ?>
+                                            <a class="mn-pagination__link mn-pagination__link--nav" href="<?= e($buildCustomerReviewPageLink($customerReviewsPage + 1)) ?>" aria-label="Trang sau">&rsaquo;</a>
+                                            <a class="mn-pagination__link mn-pagination__link--nav" href="<?= e($buildCustomerReviewPageLink($customerReviewsTotalPages)) ?>" aria-label="Trang cuối">&raquo;</a>
+                                        <?php endif; ?>
+                                    </nav>
+                                </div>
+                            <?php endif; ?>
                         </div>
                     </section>
 
@@ -488,26 +561,26 @@ $customerInitials = $extractInitials($customerName);
                         </div>
 
                         <div class="customer-live-chat">
-                            <div class="customer-message-list customer-live-chat__messages">
-                                <?php foreach ($chatMessages as $message): ?>
-                                    <article class="customer-live-chat__bubble <?= ($message['sender_type'] ?? '') === 'customer' ? 'is-customer' : 'is-admin' ?>">
-                                        <div>
-                                            <strong><?= e($message['sender_name'] ?? (($message['sender_type'] ?? '') === 'admin' ? 'RoyalBread' : $customerName)) ?></strong>
-                                            <span><?= e($message['created_at']) ?></span>
-                                        </div>
-                                        <p><?= nl2br(e($message['message'])) ?></p>
-                                    </article>
-                                <?php endforeach; ?>
-
-                                <?php foreach ($supportMessages as $message): ?>
-                                    <article>
-                                        <div>
-                                            <strong><?= e($message['author']) ?></strong>
-                                            <span><?= e($message['time']) ?></span>
-                                        </div>
-                                        <p><?= e($message['content']) ?></p>
-                                    </article>
-                                <?php endforeach; ?>
+                            <div class="customer-live-chat__messages">
+                                <?php if ($chatMessages !== []): ?>
+                                    <?php foreach ($chatMessages as $message): ?>
+                                        <?php $isCustomerMessage = ($message['sender_type'] ?? '') === 'customer'; ?>
+                                        <article class="customer-live-chat__row <?= $isCustomerMessage ? 'is-customer' : 'is-admin' ?>">
+                                            <div class="customer-live-chat__bubble <?= $isCustomerMessage ? 'is-customer' : 'is-admin' ?>">
+                                                <div class="customer-live-chat__bubble-head">
+                                                    <strong><?= e($message['sender_name'] ?? ($isCustomerMessage ? $customerName : 'RoyalBread')) ?></strong>
+                                                    <span><?= e($message['created_at']) ?></span>
+                                                </div>
+                                                <p><?= nl2br(e($message['message'])) ?></p>
+                                            </div>
+                                        </article>
+                                    <?php endforeach; ?>
+                                <?php else: ?>
+                                    <div class="customer-empty">
+                                        <strong>Chưa có tin nhắn nào.</strong>
+                                        <p>Hãy gửi tin nhắn đầu tiên để RoyalBread hỗ trợ bạn trực tiếp tại đây.</p>
+                                    </div>
+                                <?php endif; ?>
                             </div>
 
                             <form method="post" action="<?= e(url('customer/support/send')) ?>" class="customer-live-chat__form">
@@ -518,6 +591,18 @@ $customerInitials = $extractInitials($customerName);
                                 </label>
                                 <button type="submit" class="btn btn-primary">Gửi tin nhắn</button>
                             </form>
+
+                            <?php if ($supportMessages !== []): ?>
+                                <div class="customer-live-chat__tips">
+                                    <?php foreach ($supportMessages as $message): ?>
+                                        <article class="customer-live-chat__tip">
+                                            <strong><?= e($message['author']) ?></strong>
+                                            <span><?= e($message['time']) ?></span>
+                                            <p><?= e($message['content']) ?></p>
+                                        </article>
+                                    <?php endforeach; ?>
+                                </div>
+                            <?php endif; ?>
                         </div>
                     </section>
                 </div>

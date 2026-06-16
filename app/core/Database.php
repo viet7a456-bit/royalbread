@@ -26,6 +26,12 @@ class Database
                 PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
                 PDO::ATTR_EMULATE_PREPARES => false,
             ]);
+
+            $appConfig = require ROOT_PATH . '/app/config/app.php';
+            $dbTimezone = trim((string) ($appConfig['db_timezone'] ?? ''));
+            if ($dbTimezone !== '') {
+                self::$connection->exec('SET time_zone = ' . self::$connection->quote($dbTimezone));
+            }
         } catch (PDOException $e) {
             // Log to project-level file for easy debugging
             $logDir = ROOT_PATH . '/tmp/logs';

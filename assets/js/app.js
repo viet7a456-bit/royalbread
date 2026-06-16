@@ -35,50 +35,34 @@ document.addEventListener('DOMContentLoaded', function () {
     const tabs = document.querySelectorAll('#menuCategoryTabs .mn-tab');
     const groups = document.querySelectorAll('.mn-group');
     const tabsWrap = document.querySelector('.mn-tabs-wrap');
+    const scrollToMenuTarget = function (element) {
+        if (!element) {
+            return;
+        }
 
-    if (tabs.length > 0 && groups.length > 0) {
-        const scrollToMenuTarget = function (element) {
-            if (!element) {
-                return;
-            }
+        const header = document.querySelector('.site-header');
+        const headerHeight = header ? header.getBoundingClientRect().height : 0;
+        const tabsHeight = tabsWrap ? tabsWrap.getBoundingClientRect().height : 0;
+        const offset = headerHeight + tabsHeight + 18;
+        const top = window.pageYOffset + element.getBoundingClientRect().top - offset;
 
-            const header = document.querySelector('.site-header');
-            const headerHeight = header ? header.getBoundingClientRect().height : 0;
-            const tabsHeight = tabsWrap ? tabsWrap.getBoundingClientRect().height : 0;
-            const offset = headerHeight + tabsHeight + 18;
-            const top = window.pageYOffset + element.getBoundingClientRect().top - offset;
+        window.scrollTo({
+            top: Math.max(top, 0),
+            behavior: 'smooth',
+        });
+    };
 
-            window.scrollTo({
-                top: Math.max(top, 0),
-                behavior: 'smooth',
-            });
-        };
-
-        tabs.forEach(function (tab) {
-            tab.addEventListener('click', function () {
-                var filter = this.getAttribute('data-filter');
-
-                tabs.forEach(function (t) { t.classList.remove('active'); });
-                this.classList.add('active');
-                this.scrollIntoView({
+    if (tabs.length > 0) {
+        const activeTab = document.querySelector('#menuCategoryTabs .mn-tab.active');
+        if (activeTab) {
+            setTimeout(function () {
+                activeTab.scrollIntoView({
                     behavior: 'smooth',
                     block: 'nearest',
                     inline: 'center',
                 });
-
-                groups.forEach(function (group) {
-                    group.classList.remove('hidden');
-                });
-
-                if (filter === 'all') {
-                    scrollToMenuTarget(groups[0]);
-                    return;
-                }
-
-                var targetGroup = document.querySelector('.mn-group[data-group="' + filter + '"]');
-                scrollToMenuTarget(targetGroup);
-            });
-        });
+            }, 120);
+        }
     }
 
     /* ── Home Hero Visual Slider ── */
@@ -1168,7 +1152,7 @@ document.addEventListener('DOMContentLoaded', function () {
                             const baseUrl = rawBase.endsWith('/') ? rawBase : rawBase + '/';
                             searchResults.innerHTML = data.results.map(item => `
                                 <div class="search-result-item" style="display:flex; gap:10px; padding:10px; border-bottom:1px solid #eee; align-items:center;">
-                                    <a href="${baseUrl}menu#menu-item-${item.id}" class="search-result-link" style="display:flex; gap:10px; flex:1; align-items:center; text-decoration:none; color:inherit;">
+                                    <a href="${item.menu_url || (baseUrl + 'menu#menu-item-' + item.id)}" class="search-result-link" style="display:flex; gap:10px; flex:1; align-items:center; text-decoration:none; color:inherit;">
                                         <img src="${item.image_url}" alt="${item.name}" style="width:50px; height:50px; object-fit:cover; border-radius:4px;">
                                         <div class="search-result-info" style="flex:1;">
                                             <strong style="color:#3a2415; display:block;">${item.name}</strong>
@@ -1181,7 +1165,7 @@ document.addEventListener('DOMContentLoaded', function () {
                                             <input type="hidden" name="_csrf_token" value="${appConfig.csrfToken || ''}">
                                             <input type="hidden" name="id" value="${item.id}">
                                             <input type="hidden" name="quantity" value="1">
-                                            <input type="hidden" name="redirect_to" value="">
+                                            <input type="hidden" name="redirect_to" value="${item.menu_path || 'menu'}">
                                             <button type="submit" class="btn btn-outline" style="padding:5px 10px; font-size:12px;">Thêm giỏ</button>
                                         </form>
                                         <form method="post" action="${appConfig.buyNowUrl || '/cart/buy-now'}" style="margin:0;">
@@ -1221,7 +1205,7 @@ document.addEventListener('DOMContentLoaded', function () {
                                 const item = data.results[0];
                                 const rawBase = appConfig.baseUrl || '/';
                                 const baseUrl = rawBase.endsWith('/') ? rawBase : rawBase + '/';
-                                window.location.href = baseUrl + 'menu#menu-item-' + item.id;
+                                window.location.href = item.menu_url || (baseUrl + 'menu#menu-item-' + item.id);
                             } else {
                                 const rawBase = appConfig.baseUrl || '/';
                                 const baseUrl = rawBase.endsWith('/') ? rawBase : rawBase + '/';
@@ -1262,8 +1246,9 @@ document.addEventListener('DOMContentLoaded', function () {
                     // Activate corresponding category tab
                     const group = element.closest('.mn-group');
                     if (group) {
-                        const filter = group.getAttribute('data-group');
-                        const correspondingTab = document.querySelector('#menuCategoryTabs .mn-tab[data-filter="' + filter + '"]');
+                        const filter = group.getAttribute('data-group') || group.getAttribute('data-legacy-group') || '';
+                        const correspondingTab = document.querySelector('#menuCategoryTabs .mn-tab[data-filter="' + filter + '"]')
+                            || document.querySelector('#menuCategoryTabs .mn-tab[data-legacy-filter="' + filter + '"]');
                         if (correspondingTab) {
                             document.querySelectorAll('#menuCategoryTabs .mn-tab').forEach(t => t.classList.remove('active'));
                             correspondingTab.classList.add('active');
@@ -1276,28 +1261,36 @@ document.addEventListener('DOMContentLoaded', function () {
                     }
 
                     // Scroll to item with offset
-                    const header = document.querySelector('.site-header');
-                    const headerHeight = header ? header.getBoundingClientRect().height : 0;
-                    const tabsWrap = document.querySelector('.mn-tabs-wrap');
-                    const tabsHeight = tabsWrap ? tabsWrap.getBoundingClientRect().height : 0;
-                    const offset = headerHeight + tabsHeight + 18;
-                    const top = window.pageYOffset + element.getBoundingClientRect().top - offset;
-
-                    window.scrollTo({
-                        top: Math.max(top, 0),
-                        behavior: 'smooth',
-                    });
+                    scrollToMenuTarget(element);
                 }, 200);
             }
         } else if (hash && hash.startsWith('#group-')) {
-            const groupFilter = hash.substring(7);
-            const targetGroup = document.querySelector('.mn-group[data-group="' + groupFilter + '"]');
-            if (targetGroup) {
-                const correspondingTab = document.querySelector('#menuCategoryTabs .mn-tab[data-filter="' + groupFilter + '"]');
+            const groupFilter = decodeURIComponent(hash.substring(7));
+            const targetGroup = document.querySelector('.mn-group[data-group="' + groupFilter + '"]')
+                || document.querySelector('.mn-group[data-legacy-group="' + groupFilter + '"]');
+            const correspondingTab = document.querySelector('#menuCategoryTabs .mn-tab[data-filter="' + groupFilter + '"]')
+                || document.querySelector('#menuCategoryTabs .mn-tab[data-legacy-filter="' + groupFilter + '"]');
+
+            if (!targetGroup) {
                 if (correspondingTab) {
-                    if (correspondingTab.classList.contains('active')) {
-                        return;
+                    const nextHref = correspondingTab.getAttribute('href') || '';
+                    if (nextHref) {
+                        const nextUrl = new URL(nextHref, window.location.href);
+                        const currentUrl = new URL(window.location.href);
+                        const sameTarget = nextUrl.pathname === currentUrl.pathname
+                            && nextUrl.search === currentUrl.search
+                            && nextUrl.hash === currentUrl.hash;
+
+                        if (!sameTarget) {
+                            window.location.href = nextUrl.toString();
+                        }
                     }
+                }
+                return;
+            }
+
+            if (targetGroup) {
+                if (correspondingTab) {
                     document.querySelectorAll('#menuCategoryTabs .mn-tab').forEach(t => t.classList.remove('active'));
                     correspondingTab.classList.add('active');
                     correspondingTab.scrollIntoView({
@@ -1308,17 +1301,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 }
 
                 setTimeout(() => {
-                    const header = document.querySelector('.site-header');
-                    const headerHeight = header ? header.getBoundingClientRect().height : 0;
-                    const tabsWrap = document.querySelector('.mn-tabs-wrap');
-                    const tabsHeight = tabsWrap ? tabsWrap.getBoundingClientRect().height : 0;
-                    const offset = headerHeight + tabsHeight + 18;
-                    const top = window.pageYOffset + targetGroup.getBoundingClientRect().top - offset;
-
-                    window.scrollTo({
-                        top: Math.max(top, 0),
-                        behavior: 'smooth',
-                    });
+                    scrollToMenuTarget(targetGroup);
                 }, 200);
             }
         }
@@ -1395,13 +1378,16 @@ function initChatbot(appConfig) {
                 <div class="chatbot-body" id="chatbotBody">
                     <div class="chat-message bot-message">
                         <div class="chat-message__bubble">
-                            Chào bạn! Mình là trợ lý RoyalBread. Bạn có thể hỏi về món ăn, giá, best seller, món theo ngân sách, giờ mở cửa, địa chỉ, giỏ hàng hoặc đơn gần đây.
+                            Chào bạn! Mình là trợ lý RoyalBread. Bạn có thể hỏi về món bán chạy, món ngon nhất, món đắt nhất, món rẻ nhất, khuyến mãi, thanh toán, phí ship, giờ mở cửa, địa chỉ, giỏ hàng hoặc đơn gần đây.
                         </div>
                         <div class="chatbot-suggestions">
                             <button type="button" class="chatbot-suggestion-chip" data-chat-suggestion="Món bán chạy">Món bán chạy 🔥</button>
-                            <button type="button" class="chatbot-suggestion-chip" data-chat-suggestion="Gợi ý ăn no bụng">Ăn no bụng 🍳</button>
-                            <button type="button" class="chatbot-suggestion-chip" data-chat-suggestion="Đồ uống">Đồ uống 🥤</button>
-                            <button type="button" class="chatbot-suggestion-chip" data-chat-suggestion="Món dưới 30k">Món dưới 30k 💰</button>
+                            <button type="button" class="chatbot-suggestion-chip" data-chat-suggestion="Món ngon nhất">Món ngon nhất ⭐</button>
+                            <button type="button" class="chatbot-suggestion-chip" data-chat-suggestion="Món đắt nhất">Món đắt nhất 💎</button>
+                            <button type="button" class="chatbot-suggestion-chip" data-chat-suggestion="Món rẻ nhất">Món rẻ nhất 💰</button>
+                            <button type="button" class="chatbot-suggestion-chip" data-chat-suggestion="Khuyến mãi">Khuyến mãi 🎁</button>
+                            <button type="button" class="chatbot-suggestion-chip" data-chat-suggestion="Thanh toán">Thanh toán 💳</button>
+                            <button type="button" class="chatbot-suggestion-chip" data-chat-suggestion="Phí ship">Phí ship 🚚</button>
                             <button type="button" class="chatbot-suggestion-chip" data-chat-suggestion="Địa chỉ quán">Địa chỉ & Giờ mở cửa 📍</button>
                         </div>
                     </div>
@@ -1450,6 +1436,7 @@ function initChatbot(appConfig) {
                         <div class="chatbot-product-card__body">
                             <span>${escapeHtml(item.category_name || 'RoyalBread')}</span>
                             <strong>${escapeHtml(item.name || '')}</strong>
+                            ${item.rating_average && item.review_count ? `<small style="display:block; color:#8a6c4e; font-size:12px; margin-top:4px;">★ ${escapeHtml(Number(item.rating_average).toFixed(1))}/5 · ${escapeHtml(item.review_count)} đánh giá</small>` : ''}
                             <p>${escapeHtml(item.price || '')}</p>
                         </div>
                         <div class="chatbot-product-card__actions">
@@ -1562,7 +1549,7 @@ function initChatbot(appConfig) {
 
                 renderBotMessage({
                     answer: 'Hiện mình chưa kết nối được tới trợ lý RoyalBread. Bạn thử lại sau ít phút hoặc gọi hotline để quán hỗ trợ nhanh hơn.',
-                    suggestions: ['Hotline', 'Địa chỉ quán', 'Món bán chạy'],
+                    suggestions: ['Hotline', 'Địa chỉ quán', 'Món bán chạy', 'Khuyến mãi', 'Thanh toán'],
                     products: []
                 });
                 bindSuggestionChips();

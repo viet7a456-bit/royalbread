@@ -28,10 +28,12 @@ function url(string $path = ''): string
 
 function site_origin(): string
 {
-    $isHttps = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
-        || (($_SERVER['SERVER_PORT'] ?? '') === '443');
-    $scheme = $isHttps ? 'https' : 'http';
-    $host = $_SERVER['HTTP_HOST'] ?? 'localhost';
+    $scheme = Environment::isHttps() ? 'https' : 'http';
+    $host = trim((string) ($_SERVER['HTTP_HOST'] ?? Environment::currentHost() ?? 'localhost'));
+
+    if ($host === '') {
+        $host = 'localhost';
+    }
 
     return $scheme . '://' . $host;
 }
@@ -72,12 +74,15 @@ function media_url(string|null $path): string
     }
 
     $base = app_url_base();
-    if ($base !== '/royalbread' && str_starts_with($value, '/royalbread/assets/')) {
-        return url(substr($value, strlen('/royalbread/')));
-    }
-
     if ($base !== '' && str_starts_with($value, '/assets/')) {
         return url(ltrim($value, '/'));
+    }
+
+    if (str_starts_with($value, '/')) {
+        $assetsPosition = strpos($value, '/assets/');
+        if ($assetsPosition !== false) {
+            return url(ltrim(substr($value, $assetsPosition + 1), '/'));
+        }
     }
 
     if (
@@ -254,6 +259,24 @@ function membership_tier_meta(int $orderCount, int $totalSpent): array
 
 function ascii_text(string $value): string
 {
+    $map = [
+        'à'=>'a', 'á'=>'a', 'ả'=>'a', 'ã'=>'a', 'ạ'=>'a', 'â'=>'a', 'ầ'=>'a', 'ấ'=>'a', 'ẩ'=>'a', 'ẫ'=>'a', 'ậ'=>'a', 'ă'=>'a', 'ằ'=>'a', 'ắ'=>'a', 'ẳ'=>'a', 'ẵ'=>'a', 'ặ'=>'a',
+        'À'=>'A', 'Á'=>'A', 'Ả'=>'A', 'Ã'=>'A', 'Ạ'=>'A', 'Â'=>'A', 'Ầ'=>'A', 'Ấ'=>'A', 'Ẩ'=>'A', 'Ẫ'=>'A', 'Ậ'=>'A', 'Ă'=>'A', 'Ằ'=>'A', 'Ắ'=>'A', 'Ẳ'=>'A', 'Ẵ'=>'A', 'Ặ'=>'A',
+        'đ'=>'d', 'Đ'=>'D',
+        'è'=>'e', 'é'=>'e', 'ẻ'=>'e', 'ẽ'=>'e', 'ẹ'=>'e', 'ê'=>'e', 'ề'=>'e', 'ế'=>'e', 'ể'=>'e', 'ễ'=>'e', 'ệ'=>'e',
+        'È'=>'E', 'É'=>'E', 'Ẻ'=>'E', 'Ẽ'=>'E', 'Ẹ'=>'E', 'Ê'=>'E', 'Ề'=>'E', 'Ế'=>'E', 'Ể'=>'E', 'Ễ'=>'E', 'Ệ'=>'E',
+        'ì'=>'i', 'í'=>'i', 'ỉ'=>'i', 'ĩ'=>'i', 'ị'=>'i',
+        'Ì'=>'I', 'Í'=>'I', 'Ỉ'=>'I', 'Ĩ'=>'I', 'Ị'=>'I',
+        'ò'=>'o', 'ó'=>'o', 'ỏ'=>'o', 'õ'=>'o', 'ọ'=>'o', 'ô'=>'o', 'ồ'=>'o', 'ố'=>'o', 'ổ'=>'o', 'ỗ'=>'o', 'ộ'=>'o', 'ơ'=>'o', 'ờ'=>'o', 'ớ'=>'o', 'ở'=>'o', 'ỡ'=>'o', 'ợ'=>'o',
+        'Ò'=>'O', 'Ó'=>'O', 'Ỏ'=>'O', 'Õ'=>'O', 'Ô'=>'O', 'Ồ'=>'O', 'Ố'=>'O', 'Ổ'=>'O', 'Ỗ'=>'O', 'Ộ'=>'O', 'Ơ'=>'O', 'Ờ'=>'O', 'Ớ'=>'O', 'Ở'=>'O', 'Ỡ'=>'O', 'Ợ'=>'O',
+        'ù'=>'u', 'ú'=>'u', 'ủ'=>'u', 'ũ'=>'u', 'ụ'=>'u', 'ư'=>'u', 'ừ'=>'u', 'ứ'=>'u', 'ử'=>'u', 'ữ'=>'u', 'ự'=>'u',
+        'Ù'=>'U', 'Ú'=>'U', 'Ủ'=>'U', 'Ũ'=>'U', 'Ụ'=>'U', 'Ư'=>'U', 'Ừ'=>'U', 'Ứ'=>'U', 'Ử'=>'U', 'Ữ'=>'U', 'Ự'=>'U',
+        'ỳ'=>'y', 'ý'=>'y', 'ỷ'=>'y', 'ỹ'=>'y', 'ỵ'=>'y',
+        'Ỳ'=>'Y', 'Ý'=>'Y', 'Ỷ'=>'Y', 'Ỹ'=>'Y', 'Ỵ'=>'Y'
+    ];
+    
+    $value = strtr($value, $map);
+
     $transliterated = @iconv('UTF-8', 'ASCII//TRANSLIT//IGNORE', $value);
     if ($transliterated === false || $transliterated === '') {
         return preg_replace('/[^\x20-\x7E]/', '', $value) ?? $value;

@@ -132,10 +132,21 @@ class ApiController extends Controller
                 }
 
                 if ($score > 0) {
+                    $menuGroupSlug = in_array($categorySlug, ['tra-nhiet-doi', 'do-uong-truyen-thong', 'cafe'], true)
+                        ? 'do-uong'
+                        : $categorySlug;
+                    $menuPath = $menuGroupSlug !== ''
+                        ? 'menu?category=' . rawurlencode($menuGroupSlug) . '#menu-item-' . $item['id']
+                        : 'menu#menu-item-' . $item['id'];
+
                     $results[] = [
                         'id' => $item['id'],
                         'name' => $name,
                         'category_name' => $categoryName,
+                        'category_slug' => $categorySlug,
+                        'menu_group_slug' => $menuGroupSlug,
+                        'menu_path' => $menuPath,
+                        'menu_url' => url($menuPath),
                         'price' => format_price($item['price']),
                         'image_url' => media_url((string) ($item['image_url'] ?? '')),
                         'score' => $score,

@@ -222,6 +222,22 @@ class MenuItem
         return $stmt->fetchAll();
     }
 
+    public function allForAdminPaginated(int $offset, int $limit): array
+    {
+        $stmt = $this->db->prepare(
+            'SELECT m.*, c.name AS category_name, c.slug AS category_slug
+             FROM menu_items m
+             INNER JOIN categories c ON c.id = m.category_id
+             ORDER BY c.sort_order ASC, m.sort_order ASC, m.id ASC
+             LIMIT :item_limit OFFSET :item_offset'
+        );
+        $stmt->bindValue(':item_limit', $limit, PDO::PARAM_INT);
+        $stmt->bindValue(':item_offset', $offset, PDO::PARAM_INT);
+        $stmt->execute();
+
+        return $stmt->fetchAll();
+    }
+
     public function bestSelling(int $limit = 8): array
     {
         $stmt = $this->db->prepare(

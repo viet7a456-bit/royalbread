@@ -65,6 +65,7 @@ class App
             'admin/orders/update-status' => [AdminController::class, 'updateOrderStatus'],
             'admin/orders/update-payment-status' => [AdminController::class, 'updatePaymentStatus'],
             'admin/reviews/update-status' => [AdminController::class, 'updateReviewStatus'],
+            'admin/reviews/update-statuses' => [AdminController::class, 'updateReviewsStatus'],
             'admin/messages/send' => [AdminController::class, 'sendLiveChatMessage'],
             'admin/messages/thread-status' => [AdminController::class, 'updateLiveChatThreadStatus'],
             'admin/menu/store' => [AdminController::class, 'storeMenuItem'],

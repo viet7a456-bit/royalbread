@@ -27,7 +27,7 @@ $csvQuery = http_build_query(array_merge($_GET, ['format' => 'csv']));
         </div>
 
         <form method="get" action="<?= e(url('admin/orders')) ?>" class="admin-search-form">
-            <input type="text" name="search" value="<?= e($searchQuery) ?>" placeholder="Mã đơn, tên khách, email, số điện thoại...">
+            <input type="text" name="search" value="<?= e($searchQuery) ?>" placeholder="Mã đơn, tên khách, tên món, email, số điện thoại...">
             <input type="date" name="date" value="<?= e($searchDate) ?>">
             <button type="submit" class="admin-btn">Tìm kiếm</button>
             <?php if ($searchQuery !== '' || $searchDate !== ''): ?>
@@ -37,9 +37,14 @@ $csvQuery = http_build_query(array_merge($_GET, ['format' => 'csv']));
     </div>
 
     <div class="admin-export-row no-print">
-        <a href="<?= e(url('admin/orders/export?' . $xlsxQuery)) ?>" class="admin-btn admin-btn--excel">Xuất Excel</a>
-        <a href="<?= e(url('admin/orders/export?' . $pdfQuery)) ?>" class="admin-btn admin-btn--pdf">Xuất PDF</a>
-        <a href="<?= e(url('admin/orders/export?' . $csvQuery)) ?>" class="admin-btn admin-btn--ghost">Xuất CSV</a>
+        <details class="admin-export-menu">
+            <summary class="admin-btn admin-export-menu__summary">Xuất file</summary>
+            <div class="admin-export-menu__panel">
+                <a href="<?= e(url('admin/orders/export?' . $xlsxQuery)) ?>" class="admin-export-menu__link">Xuất Excel</a>
+                <a href="<?= e(url('admin/orders/export?' . $pdfQuery)) ?>" class="admin-export-menu__link">Xuất PDF</a>
+                <a href="<?= e(url('admin/orders/export?' . $csvQuery)) ?>" class="admin-export-menu__link">Xuất CSV</a>
+            </div>
+        </details>
     </div>
 
     <?php if ($orders !== []): ?>
@@ -49,6 +54,7 @@ $csvQuery = http_build_query(array_merge($_GET, ['format' => 'csv']));
                     <tr>
                         <th>Mã đơn</th>
                         <th>Khách hàng</th>
+                        <th>Món khách đặt</th>
                         <th>Giao hàng</th>
                         <th>Thời gian</th>
                         <th>Thanh toán</th>
@@ -75,6 +81,30 @@ $csvQuery = http_build_query(array_merge($_GET, ['format' => 'csv']));
                                 <a href="tel:<?= e((string) ($order['phone'] ?? '')) ?>"><?= e((string) ($order['phone'] ?? '')) ?></a>
                                 <?php if (!empty($order['customer_email'])): ?>
                                     <br><small><?= e((string) $order['customer_email']) ?></small>
+                                <?php endif; ?>
+                            </td>
+                            <td>
+                                <?php if (!empty($order['items'])): ?>
+                                    <div class="admin-order-items">
+                                        <?php foreach ($order['items'] as $item): ?>
+                                            <div class="admin-order-item">
+                                                <?php $itemImage = trim((string) ($item['image_url'] ?? '')); ?>
+                                                <?php if ($itemImage !== ''): ?>
+                                                    <img src="<?= e(media_url($itemImage)) ?>" alt="<?= e((string) ($item['menu_item_name'] ?? 'Món đặt')) ?>">
+                                                <?php endif; ?>
+                                                <div class="admin-order-item__copy">
+                                                    <strong><?= e((string) ($item['menu_item_name'] ?? 'Món đặt')) ?></strong>
+                                                    <small>x<?= e((string) ($item['quantity'] ?? 0)) ?> • <?= e(format_price((int) ($item['price'] ?? 0))) ?></small>
+                                                </div>
+                                            </div>
+                                        <?php endforeach; ?>
+                                        <small class="admin-order-items__summary">
+                                            <?= e((string) ($order['items_count'] ?? 0)) ?> món •
+                                            <?= e((string) ($order['items_quantity_total'] ?? 0)) ?> phần
+                                        </small>
+                                    </div>
+                                <?php else: ?>
+                                    <small class="admin-order-items__empty">Chưa có chi tiết món trong đơn.</small>
                                 <?php endif; ?>
                             </td>
                             <td>

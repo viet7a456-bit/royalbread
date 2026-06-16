@@ -16,10 +16,30 @@ class Controller
         extract($data, EXTR_SKIP);
 
         ob_start();
-        require $viewFile;
-        $content = ob_get_clean();
+        try {
+            require $viewFile;
+            $content = ob_get_clean();
+        } catch (Throwable $error) {
+            if (ob_get_level() > 0) {
+                ob_end_clean();
+            }
 
-        require $layoutFile;
+            throw new RuntimeException(
+                sprintf('Loi render view "%s": %s', $view, $error->getMessage()),
+                0,
+                $error
+            );
+        }
+
+        try {
+            require $layoutFile;
+        } catch (Throwable $error) {
+            throw new RuntimeException(
+                sprintf('Loi render layout "%s" cho view "%s": %s', $layout, $view, $error->getMessage()),
+                0,
+                $error
+            );
+        }
     }
 
     protected function redirectTo(string $path): void

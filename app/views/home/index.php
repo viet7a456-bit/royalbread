@@ -80,6 +80,23 @@ $pickItemsByIds = static function (array $itemsById, array $ids): array {
     return $picked;
 };
 
+$menuCategoryLink = static function (string $groupName, array $items = []): string {
+    $categorySlug = trim((string) ($items[0]['category_slug'] ?? ''));
+
+    if (
+        $groupName === 'Đồ uống' ||
+        in_array($categorySlug, ['tra-nhiet-doi', 'do-uong-truyen-thong', 'cafe'], true)
+    ) {
+        return url('menu?category=do-uong');
+    }
+
+    if ($categorySlug !== '') {
+        return url('menu?category=' . rawurlencode($categorySlug));
+    }
+
+    return url('menu');
+};
+
 [$breadGroupName, $breadItems] = $resolveGroup($menuGroups, ['Bánh Mì Kẹp'], ['Bánh Mì Kẹp', 'Bánh Mì']);
 [$panGroupName, $panItems] = $resolveGroup($menuGroups, ['Bánh Mì Chảo'], ['Chảo']);
 
@@ -106,7 +123,7 @@ foreach (['tra-nhiet-doi', 'do-uong-truyen-thong', 'cafe'] as $drinkSlug) {
 $drinkGroupName = $drinkItems !== [] ? 'Đồ uống' : '';
 $featuredFromDrinks = $drinkItems !== [] ? $drinkItems : $featuredItems;
 $heroBreadItem = $breadItems[0] ?? $featuredItems[0] ?? null;
-$homeDrinkMenuLink = url('menu') . '#group-' . md5('Đồ uống');
+$homeDrinkMenuLink = $menuCategoryLink('Đồ uống', $drinkItems);
 
 $menuItemsById = [];
 foreach ($menuGroups as $groupItems) {
@@ -326,7 +343,7 @@ $categoryShowcase = [
                             <p><?= e($card['summary']) ?></p>
                             <small><?= e($card['detail']) ?> • <?= e((string) count($card['items'])) ?> món</small>
                         </div>
-                        <a class="home-arrow-link" href="<?= e(url('menu') . '#group-' . md5($card['group_name'])) ?>" aria-label="<?= e('Xem ' . $card['title']) ?>">&#8594;</a>
+                        <a class="home-arrow-link" href="<?= e($menuCategoryLink((string) ($card['group_name'] ?? ''), $card['items'] ?? [])) ?>" aria-label="<?= e('Xem ' . $card['title']) ?>">&#8594;</a>
                     </article>
                 <?php endforeach; ?>
             </div>
@@ -407,6 +424,46 @@ $categoryShowcase = [
                                 <span class="home-drink-card__cta">Xem trong thực đơn</span>
                             </div>
                         </a>
+                    <?php endforeach; ?>
+                </div>
+            </div>
+        </section>
+    <?php endif; ?>
+
+    <?php if (!empty($homeReviews)): ?>
+        <section class="home-section home-section--reviews">
+            <div class="container">
+                <div class="home-heading">
+                    <span></span>
+                    <div class="home-review-heading-copy">
+                        <h2>Khách hàng nói gì về RoyalBread</h2>
+                        <p>Chỉ hiển thị đánh giá đã được admin duyệt. Hiện có <?= e(number_format((int) ($homeReviewCount ?? 0), 0, ',', '.')) ?> review thật từ khách hàng.</p>
+                    </div>
+                    <span></span>
+                </div>
+
+                <div class="home-review-grid">
+                    <?php foreach ($homeReviews as $review): ?>
+                        <article class="home-review-card">
+                            <div class="home-review-card__head">
+                                <div>
+                                    <strong><?= e($review['customer_name'] ?? 'Khách hàng RoyalBread') ?></strong>
+                                    <span><?= e($review['menu_item_name'] ?? 'Món đã mua') ?></span>
+                                </div>
+                                <span class="home-review-card__rating"><?= e(str_repeat('★', max(1, (int) ($review['rating'] ?? 0)))) ?></span>
+                            </div>
+
+                            <?php if (trim((string) ($review['review_title'] ?? '')) !== ''): ?>
+                                <h3><?= e($review['review_title']) ?></h3>
+                            <?php endif; ?>
+
+                            <p><?= e($review['review_comment'] ?? '') ?></p>
+
+                            <div class="home-review-card__foot">
+                                <span><?= e($review['category_name'] ?? 'RoyalBread') ?></span>
+                                <small><?= e(date('d/m/Y', strtotime((string) ($review['created_at'] ?? 'now')))) ?></small>
+                            </div>
+                        </article>
                     <?php endforeach; ?>
                 </div>
             </div>

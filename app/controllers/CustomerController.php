@@ -4,6 +4,40 @@ declare(strict_types=1);
 
 class CustomerController extends Controller
 {
+    private function logAccountFeatureError(Throwable $error): void
+    {
+        $logDir = ROOT_PATH . '/tmp/logs';
+        if (!is_dir($logDir)) {
+            @mkdir($logDir, 0755, true);
+        }
+
+        $entry = sprintf(
+            "[%s] Customer account feature error: %s\n%s\n",
+            date('Y-m-d H:i:s'),
+            $error->getMessage(),
+            $error->getTraceAsString()
+        );
+        @file_put_contents($logDir . '/customer_features.log', $entry, FILE_APPEND | LOCK_EX);
+        error_log('RoyalBread customer feature error: ' . $error->getMessage());
+    }
+
+    private function logCustomerPageError(Throwable $error): void
+    {
+        $logDir = ROOT_PATH . '/tmp/logs';
+        if (!is_dir($logDir)) {
+            @mkdir($logDir, 0755, true);
+        }
+
+        $entry = sprintf(
+            "[%s] Customer page error: %s\n%s\n",
+            date('Y-m-d H:i:s'),
+            $error->getMessage(),
+            $error->getTraceAsString()
+        );
+        @file_put_contents($logDir . '/customer_page.log', $entry, FILE_APPEND | LOCK_EX);
+        error_log('RoyalBread customer page error: ' . $error->getMessage());
+    }
+
     private function resolveCustomerOrRedirect(): array
     {
         if (empty($_SESSION['customer_id'])) {
@@ -25,8 +59,6 @@ class CustomerController extends Controller
 
     public function index(): void
     {
-        $settingModel = new Setting();
-        $menuItemModel = new MenuItem();
         $categoryModel = new Category();
         $customerModel = new Customer();
         $orderModel = new Order();
@@ -34,10 +66,22 @@ class CustomerController extends Controller
         $reviewModel = new ProductReview();
         $liveChatModel = new LiveChat();
 
-        $settings = $settingModel->all();
-        $menuGroups = $menuItemModel->grouped();
-        $featuredItems = $menuItemModel->featured(8);
-        $bestSellingItems = $menuItemModel->bestSelling(6);
+        $settings = [];
+        $menuGroups = [];
+        $featuredItems = [];
+        $bestSellingItems = [];
+
+        try {
+            $settingModel = new Setting();
+            $menuItemModel = new MenuItem();
+
+            $settings = $settingModel->all();
+            $menuGroups = $menuItemModel->grouped();
+            $featuredItems = $menuItemModel->featured(8);
+            $bestSellingItems = $menuItemModel->bestSelling(6);
+        } catch (Throwable $pageError) {
+            $this->logCustomerPageError($pageError);
+        }
 
         $totalItems = 0;
         foreach ($menuGroups as $items) {
@@ -55,6 +99,11 @@ class CustomerController extends Controller
         $addressCards = [];
         $reviewableItems = [];
         $customerReviews = [];
+        $customerReviewsPage = 1;
+        $customerReviewsTotal = 0;
+        $customerReviewsTotalPages = 1;
+        $customerReviewsVisibleFrom = 0;
+        $customerReviewsVisibleTo = 0;
         $chatThread = null;
         $chatMessages = [];
         $membership = membership_tier_meta(0, 0);
@@ -78,9 +127,23 @@ class CustomerController extends Controller
                     $orderInsights['total_spent']
                 );
 
-                $favoriteItems = $favoriteModel->itemsForCustomer((int) $customer['id'], 8);
-                $reviewableItems = $reviewModel->reviewableItemsForCustomer((int) $customer['id'], 6);
-                $customerReviews = $reviewModel->forCustomer((int) $customer['id']);
+                try {
+                    $favoriteItems = $favoriteModel->itemsForCustomer((int) $customer['id'], 8);
+                    $reviewableItems = $reviewModel->reviewableItemsForCustomer((int) $customer['id'], 6);
+                    $customerReviewsPage = max(1, (int) ($_GET['review_page'] ?? 1));
+                    $customerReviewsTotal = $reviewModel->countForCustomer((int) $customer['id']);
+                    $customerReviewsTotalPages = max(1, (int) ceil($customerReviewsTotal / 5));
+                    $customerReviewsPage = min($customerReviewsPage, $customerReviewsTotalPages);
+                    $customerReviewsOffset = ($customerReviewsPage - 1) * 5;
+                    $customerReviews = $reviewModel->forCustomerPaginated((int) $customer['id'], 5, $customerReviewsOffset);
+                    $customerReviewsVisibleFrom = $customerReviewsTotal > 0 ? $customerReviewsOffset + 1 : 0;
+                    $customerReviewsVisibleTo = $customerReviewsTotal > 0 ? min($customerReviewsOffset + count($customerReviews), $customerReviewsTotal) : 0;
+                } catch (Throwable $featureError) {
+                    $this->logAccountFeatureError($featureError);
+                    $favoriteItems = [];
+                    $reviewableItems = [];
+                    $customerReviews = [];
+                }
 
                 if ($suggestedItems === []) {
                     $suggestedItems = $bestSellingItems !== [] ? $bestSellingItems : array_slice($featuredItems, 0, 4);
@@ -100,9 +163,15 @@ class CustomerController extends Controller
                 $notifications = $this->buildNotifications($settings, $membership, $priceHighlights, $latestOrder);
                 $supportMessages = $this->buildSupportMessages($settings, $membership, $latestOrder);
 
-                $chatThread = $liveChatModel->getOrCreateOpenThreadForCustomer((int) $customer['id']);
-                $liveChatModel->markReadForViewer((int) $chatThread['id'], 'customer');
-                $chatMessages = $liveChatModel->messagesForThread((int) $chatThread['id']);
+                try {
+                    $chatThread = $liveChatModel->getOrCreateOpenThreadForCustomer((int) $customer['id']);
+                    $liveChatModel->markReadForViewer((int) $chatThread['id'], 'customer');
+                    $chatMessages = $liveChatModel->messagesForThread((int) $chatThread['id']);
+                } catch (Throwable $featureError) {
+                    $this->logAccountFeatureError($featureError);
+                    $chatThread = null;
+                    $chatMessages = [];
+                }
             }
         }
 
@@ -115,7 +184,7 @@ class CustomerController extends Controller
             'featuredItems' => $featuredItems,
             'bestSellingItems' => $bestSellingItems,
             'menuGroups' => $menuGroups,
-            'categoryCount' => $categoryModel->countAll(),
+            'categoryCount' => $menuGroups !== [] ? $categoryModel->countAll() : 0,
             'totalItems' => $totalItems,
             'customer' => $customer,
             'profile' => $profile,
@@ -129,6 +198,11 @@ class CustomerController extends Controller
             'membership' => $membership,
             'reviewableItems' => $reviewableItems,
             'customerReviews' => $customerReviews,
+            'customerReviewsPage' => $customerReviewsPage,
+            'customerReviewsTotal' => $customerReviewsTotal,
+            'customerReviewsTotalPages' => $customerReviewsTotalPages,
+            'customerReviewsVisibleFrom' => $customerReviewsVisibleFrom,
+            'customerReviewsVisibleTo' => $customerReviewsVisibleTo,
             'chatThread' => $chatThread,
             'chatMessages' => $chatMessages,
         ]);
@@ -145,7 +219,14 @@ class CustomerController extends Controller
             $this->redirectTo($redirectTo);
         }
 
-        $isFavorite = (new Favorite())->toggle((int) $customer['id'], $menuItemId);
+        try {
+            $isFavorite = (new Favorite())->toggle((int) $customer['id'], $menuItemId);
+        } catch (Throwable $featureError) {
+            $this->logAccountFeatureError($featureError);
+            Session::flash('error', 'Tinh nang yeu thich tam thoi chua san sang tren hosting.');
+            $this->redirectTo($redirectTo);
+        }
+
         Session::flash('success', $isFavorite ? 'Da them mon vao danh sach yeu thich.' : 'Da bo mon khoi danh sach yeu thich.');
         $this->redirectTo($redirectTo);
     }
@@ -164,15 +245,21 @@ class CustomerController extends Controller
             $this->redirectTo('account#danh-gia');
         }
 
-        (new ProductReview())->createOrUpdate([
-            'customer_id' => (int) $customer['id'],
-            'menu_item_id' => $menuItemId,
-            'order_id' => $orderId,
-            'rating' => $rating,
-            'review_title' => $reviewTitle,
-            'review_comment' => $reviewComment,
-            'status' => 'pending',
-        ]);
+        try {
+            (new ProductReview())->createOrUpdate([
+                'customer_id' => (int) $customer['id'],
+                'menu_item_id' => $menuItemId,
+                'order_id' => $orderId,
+                'rating' => $rating,
+                'review_title' => $reviewTitle,
+                'review_comment' => $reviewComment,
+                'status' => 'pending',
+            ]);
+        } catch (Throwable $featureError) {
+            $this->logAccountFeatureError($featureError);
+            Session::flash('error', 'Tinh nang danh gia tam thoi chua san sang tren hosting.');
+            $this->redirectTo('account#danh-gia');
+        }
 
         Session::flash('success', 'RoyalBread da nhan danh gia cua ban va se hien thi sau khi duyet.');
         $this->redirectTo('account#danh-gia');
@@ -188,15 +275,21 @@ class CustomerController extends Controller
             $this->redirectTo('account#ho-tro');
         }
 
-        $liveChatModel = new LiveChat();
-        $thread = $liveChatModel->getOrCreateOpenThreadForCustomer((int) $customer['id']);
-        $liveChatModel->addMessage(
-            (int) $thread['id'],
-            'customer',
-            (int) $customer['id'],
-            (string) $customer['full_name'],
-            $message
-        );
+        try {
+            $liveChatModel = new LiveChat();
+            $thread = $liveChatModel->getOrCreateOpenThreadForCustomer((int) $customer['id']);
+            $liveChatModel->addMessage(
+                (int) $thread['id'],
+                'customer',
+                (int) $customer['id'],
+                (string) $customer['full_name'],
+                $message
+            );
+        } catch (Throwable $featureError) {
+            $this->logAccountFeatureError($featureError);
+            Session::flash('error', 'Tinh nang chat truc tiep tam thoi chua san sang tren hosting.');
+            $this->redirectTo('account#ho-tro');
+        }
 
         Session::flash('success', 'Da gui tin nhan toi RoyalBread.');
         $this->redirectTo('account#ho-tro');

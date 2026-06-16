@@ -101,6 +101,40 @@ class Order
         return $stmt->fetchAll();
     }
 
+    public function itemsForOrders(array $orderIds): array
+    {
+        $normalizedIds = array_values(array_unique(array_filter(
+            array_map(static fn(mixed $id): int => (int) $id, $orderIds),
+            static fn(int $id): bool => $id > 0
+        )));
+
+        if ($normalizedIds === []) {
+            return [];
+        }
+
+        $placeholders = implode(',', array_fill(0, count($normalizedIds), '?'));
+        $stmt = $this->db->prepare(
+            '
+            SELECT
+                oi.*,
+                COALESCE(m.name, oi.menu_item_name, CONCAT(\'Mon #\', oi.menu_item_id)) AS menu_item_name,
+                COALESCE(m.image_url, oi.menu_item_image_url, \'\') AS image_url
+            FROM order_items oi
+            LEFT JOIN menu_items m ON oi.menu_item_id = m.id
+            WHERE oi.order_id IN (' . $placeholders . ')
+            ORDER BY oi.order_id DESC, oi.id ASC
+            '
+        );
+        $stmt->execute($normalizedIds);
+
+        $itemsByOrderId = [];
+        foreach ($stmt->fetchAll() as $item) {
+            $itemsByOrderId[(int) $item['order_id']][] = $item;
+        }
+
+        return $itemsByOrderId;
+    }
+
     public function updateStatus(int $id, string $status): void
     {
         $stmt = $this->db->prepare('UPDATE orders SET status = :status WHERE id = :id');

@@ -35,9 +35,14 @@ $csvQuery = http_build_query(array_merge($_GET, ['format' => 'csv']));
     <?php endif; ?>
 
     <div class="admin-export-row no-print">
-        <a href="<?= e(url('admin/customers/export?' . $xlsxQuery)) ?>" class="admin-btn admin-btn--excel">Xuất Excel</a>
-        <a href="<?= e(url('admin/customers/export?' . $pdfQuery)) ?>" class="admin-btn admin-btn--pdf">Xuất PDF</a>
-        <a href="<?= e(url('admin/customers/export?' . $csvQuery)) ?>" class="admin-btn admin-btn--ghost">Xuất CSV</a>
+        <details class="admin-export-menu">
+            <summary class="admin-btn admin-export-menu__summary">Xuất file</summary>
+            <div class="admin-export-menu__panel">
+                <a href="<?= e(url('admin/customers/export?' . $xlsxQuery)) ?>" class="admin-export-menu__link">Xuất Excel</a>
+                <a href="<?= e(url('admin/customers/export?' . $pdfQuery)) ?>" class="admin-export-menu__link">Xuất PDF</a>
+                <a href="<?= e(url('admin/customers/export?' . $csvQuery)) ?>" class="admin-export-menu__link">Xuất CSV</a>
+            </div>
+        </details>
     </div>
 
     <?php if ($customers !== []): ?>

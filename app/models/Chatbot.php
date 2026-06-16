@@ -12,6 +12,11 @@ class Chatbot
     private array $itemIndex = [];
     private array $context = [];
     private array $bestSellingItems = [];
+    private array $reviewSummaries = [];
+    private array $topRatedItems = [];
+    private array $mostExpensiveItems = [];
+    private array $cheapestItems = [];
+    private array $activePromotions = [];
 
     public function __construct()
     {
@@ -39,12 +44,36 @@ class Chatbot
             }
         }
 
+        $availableItemIds = array_values(array_filter(array_map(
+            static fn(array $item): int => (int) ($item['id'] ?? 0),
+            $this->availableItems
+        )));
+
+        try {
+            if ($availableItemIds !== []) {
+                $reviewModel = new ProductReview();
+                $this->reviewSummaries = $reviewModel->summaryByItemIds($availableItemIds);
+            }
+        } catch (Throwable $error) {
+            $this->reviewSummaries = [];
+        }
+
         $this->bestSellingItems = $menuItemModel->bestSelling(8);
         if ($this->bestSellingItems === []) {
             $this->bestSellingItems = $menuItemModel->featured(8);
         }
         if ($this->bestSellingItems === []) {
             $this->bestSellingItems = array_slice($this->availableItems, 0, 8);
+        }
+
+        $this->mostExpensiveItems = $this->sortedItemsByPrice($this->availableItems, false);
+        $this->cheapestItems = $this->sortedItemsByPrice($this->availableItems, true);
+        $this->topRatedItems = $this->buildTopRatedItems();
+
+        try {
+            $this->activePromotions = (new Promotion())->activeForTier('all');
+        } catch (Throwable $error) {
+            $this->activePromotions = [];
         }
 
         $this->context = is_array($_SESSION['chatbot_context'] ?? null)
@@ -60,15 +89,35 @@ class Chatbot
         if ($normalized === '') {
             return $this->buildResponse(
                 'Chào bạn! Mình có thể tư vấn món ăn, đồ uống, phí ship, cách đặt hàng, địa chỉ quán, đơn gần đây và món bán chạy của RoyalBread.',
-                ['Món bán chạy', 'Xem thực đơn', 'Phí ship', 'Địa chỉ quán']
+                ['Món bán chạy', 'Món ngon nhất', 'Khuyến mãi', 'Phí ship']
             );
         }
 
         if ($this->isGreeting($normalized)) {
             return $this->buildResponse(
-                'Chào bạn! Bạn muốn mình gợi ý món no bụng, đồ uống dễ chọn, báo giá hay hướng dẫn đặt món luôn?',
-                ['Món bán chạy', 'Món dưới 30k', 'Đồ uống', 'Đặt hàng thế nào']
+                'Chào bạn! Bạn có thể hỏi mình về món bán chạy, món ngon nhất, món đắt nhất, món rẻ nhất, khuyến mãi, phí ship, thanh toán hay cách đặt hàng.',
+                ['Món bán chạy', 'Món ngon nhất', 'Món dưới 30k', 'Khuyến mãi']
             );
+        }
+
+        if ($this->containsAny($normalized, ['ban giup duoc gi', 'giup gi', 'hoi duoc gi', 'co the hoi gi', 'tro giup', 'faq', 'chatbot giup gi'])) {
+            return $this->answerHelpTopics();
+        }
+
+        if ($this->containsAny($normalized, ['dat nhat', 'mac nhat', 'gia cao nhat', 'món đắt nhất', 'đắt nhất', 'expensive', 'món mắc nhất', 'mắc nhất'])) {
+            return $this->answerMostExpensive();
+        }
+
+        if ($this->containsAny($normalized, ['re nhat', 'rẻ nhất', 'mon re nhat', 'món rẻ nhất', 'gia re', 'cheapest', 'rẻ nhất là gì', 'rẻ nhất có gì'])) {
+            return $this->answerCheapest();
+        }
+
+        if ($this->containsAny($normalized, ['ngon nhat', 'món ngon nhất', 'món ngon', 'món nên thử', 'nen thu', 'goi y mon', 'gợi ý món', 'nên ăn gì', 'ăn gì ngon', 'mon nao ngon', 'best taste'])) {
+            return $this->answerTopRated();
+        }
+
+        if ($this->containsAny($normalized, ['khuyen mai', 'giam gia', 'voucher', 'ma giam gia', 'uu dai', 'sale', 'coupon', 'khuyen mai gi'])) {
+            return $this->answerPromotions();
         }
 
         if ($this->containsAny($normalized, ['dia chi', 'ban do', 'o dau', 'vi tri'])) {
@@ -165,14 +214,14 @@ class Chatbot
             return $this->answerFavorites();
         }
 
-        if ($this->containsAny($normalized, ['review', 'danh gia', 'binh luan'])) {
+        if ($this->containsAny($normalized, ['review', 'danh gia', 'binh luan', 'danh gia san pham', 'cho xem danh gia'])) {
             return $this->buildResponse(
                 'Khách hàng đã đăng nhập có thể vào khu tài khoản để viết đánh giá, bình luận và chấm sao cho món đã mua.',
                 ['Tài khoản khách hàng', 'Đơn gần đây', 'Xem thực đơn']
             );
         }
 
-        if ($this->containsAny($normalized, ['nhan vien', 'ho tro truc tuyen', 'live chat', 'chat truc tiep'])) {
+        if ($this->containsAny($normalized, ['nhan vien', 'ho tro truc tuyen', 'live chat', 'chat truc tiep', 'chat voi quan', 'nhan tin voi quan'])) {
             return $this->buildResponse(
                 'RoyalBread đã có khung chat hỗ trợ trực tiếp trong tài khoản khách hàng. Bạn đăng nhập, vào mục "Hỗ trợ" là có thể nhắn ngay với cửa hàng.',
                 ['Tài khoản khách hàng', 'Hotline', 'Địa chỉ quán']
@@ -190,7 +239,7 @@ class Chatbot
             return $this->answerMenuSummary();
         }
 
-        if ($this->containsAny($normalized, ['mon ban chay', 'best seller', 'noi bat', 'ban chay'])) {
+        if ($this->containsAny($normalized, ['mon ban chay', 'best seller', 'noi bat', 'ban chay', 'ban chay nhat', 'mua nhieu nhat', 'pho bien nhat', 'hot nhat', 'duoc mua nhieu nhat'])) {
             return $this->answerBestSelling();
         }
 
@@ -240,7 +289,7 @@ class Chatbot
 
         return $this->buildResponse(
             'Mình chưa hiểu trọn ý bạn. Bạn có thể hỏi về món bán chạy, đồ uống, phí ship, cách đặt hàng, địa chỉ quán hoặc đơn gần đây.',
-            ['Món bán chạy', 'Đồ uống', 'Đặt hàng thế nào', 'Địa chỉ quán']
+            ['Món bán chạy', 'Món ngon nhất', 'Món rẻ nhất', 'Khuyến mãi', 'Thanh toán']
         );
     }
 
@@ -255,6 +304,31 @@ class Chatbot
         );
     }
 
+    private function answerHelpTopics(): array
+    {
+        $answer = implode("\n", [
+            'Bạn có thể hỏi mình các nhóm câu hỏi phổ biến sau:',
+            '- Món bán chạy / bestseller',
+            '- Món ngon nhất / nên thử',
+            '- Món đắt nhất / rẻ nhất',
+            '- Món dưới 30k',
+            '- Khuyến mãi / giảm giá / voucher',
+            '- Phương thức thanh toán',
+            '- Phí ship / giao hàng',
+            '- Địa chỉ / giờ mở cửa / hotline',
+            '- Đơn gần đây / trạng thái đơn hàng',
+            '- Món yêu thích / review / bình luận',
+            '- Đồ uống / bữa sáng / ăn no / topping / combo',
+            '- Chat trực tiếp với quán',
+            '- Xem thực đơn theo danh mục',
+        ]);
+
+        return $this->buildResponse(
+            $answer,
+            ['Món bán chạy', 'Món ngon nhất', 'Món đắt nhất', 'Món rẻ nhất', 'Khuyến mãi']
+        );
+    }
+
     private function answerBestSelling(): array
     {
         $items = array_slice($this->bestSellingItems, 0, 6);
@@ -265,6 +339,151 @@ class Chatbot
             ['Món dưới 30k', 'Đồ uống', 'Đặt hàng thế nào'],
             $items
         );
+    }
+
+    private function answerMostExpensive(): array
+    {
+        $items = array_slice($this->mostExpensiveItems, 0, 6);
+        $this->rememberContext('price', 'expensive', $items);
+
+        return $this->buildResponse(
+            'Đây là những món có giá cao nhất hiện có trên RoyalBread. Nếu bạn muốn, mình cũng có thể lọc tiếp theo món ngon nhất hoặc món bán chạy nhất.',
+            ['Món ngon nhất', 'Món bán chạy', 'Món rẻ nhất'],
+            $items
+        );
+    }
+
+    private function answerCheapest(): array
+    {
+        $items = array_slice($this->cheapestItems, 0, 6);
+        $this->rememberContext('price', 'cheap', $items);
+
+        return $this->buildResponse(
+            'Đây là những món rẻ nhất hiện có trên menu RoyalBread. Nếu bạn muốn lọc theo ngân sách cụ thể như dưới 30k, mình cũng làm được.',
+            ['Món dưới 30k', 'Món bán chạy', 'Món ngon nhất'],
+            $items
+        );
+    }
+
+    private function answerTopRated(): array
+    {
+        $items = array_slice($this->topRatedItems, 0, 6);
+        if ($items === []) {
+            $items = array_slice($this->bestSellingItems, 0, 6);
+        }
+
+        $this->rememberContext('top-rated', null, $items);
+
+        return $this->buildResponse(
+            'Đây là những món được đánh giá cao nhất và đáng thử nhất hiện tại. Mình ưu tiên món có rating tốt, rồi mới bổ sung món bán chạy để bạn dễ chọn.',
+            ['Món bán chạy', 'Món đắt nhất', 'Món rẻ nhất'],
+            $items
+        );
+    }
+
+    private function answerPromotions(): array
+    {
+        if ($this->activePromotions === []) {
+            return $this->buildResponse(
+                'Hiện tại mình chưa thấy chương trình khuyến mãi đang bật. Nếu quán có ưu đãi mới, hệ thống sẽ tự cập nhật trong phần tài khoản và giỏ hàng.',
+                ['Món bán chạy', 'Món ngon nhất', 'Thanh toán']
+            );
+        }
+
+        $lines = ['Đây là các khuyến mãi đang hoạt động:'];
+        $products = [];
+        foreach (array_slice($this->activePromotions, 0, 4) as $promotion) {
+            $parts = [];
+            $title = trim((string) ($promotion['title'] ?? 'Khuyến mãi RoyalBread'));
+            $content = trim((string) ($promotion['content'] ?? ''));
+            if ($content !== '') {
+                $parts[] = $content;
+            }
+
+            if ((int) ($promotion['discount_percent'] ?? 0) > 0) {
+                $parts[] = 'Giảm ' . (int) $promotion['discount_percent'] . '%';
+            }
+            if ((int) ($promotion['discount_amount'] ?? 0) > 0) {
+                $parts[] = 'Giảm ' . format_price((int) $promotion['discount_amount']);
+            }
+            if (trim((string) ($promotion['coupon_code'] ?? '')) !== '') {
+                $parts[] = 'Mã: ' . strtoupper(trim((string) $promotion['coupon_code']));
+            }
+            if (trim((string) ($promotion['expires_at'] ?? '')) !== '') {
+                $parts[] = 'Hạn: ' . date('d/m/Y H:i', strtotime((string) $promotion['expires_at']));
+            }
+
+            $lines[] = '- ' . $title . ' (' . implode(', ', $parts) . ')';
+        }
+
+        $this->rememberContext('promotion', null, []);
+
+        return $this->buildResponse(
+            implode("\n", $lines),
+            ['Món bán chạy', 'Món ngon nhất', 'Món dưới 30k'],
+            $products
+        );
+    }
+
+    private function sortedItemsByPrice(array $items, bool $ascending = true): array
+    {
+        $sorted = array_values($items);
+        usort($sorted, static function (array $left, array $right) use ($ascending): int {
+            $leftPrice = (int) ($left['price'] ?? 0);
+            $rightPrice = (int) ($right['price'] ?? 0);
+
+            if ($leftPrice === $rightPrice) {
+                return strcasecmp((string) ($left['name'] ?? ''), (string) ($right['name'] ?? ''));
+            }
+
+            return $ascending ? ($leftPrice <=> $rightPrice) : ($rightPrice <=> $leftPrice);
+        });
+
+        return $sorted;
+    }
+
+    private function buildTopRatedItems(): array
+    {
+        $ranked = [];
+
+        foreach ($this->availableItems as $item) {
+            $itemId = (int) ($item['id'] ?? 0);
+            $summary = $this->reviewSummaries[$itemId] ?? null;
+            $reviewCount = (int) ($summary['review_count'] ?? 0);
+            $ratingAverage = (float) ($summary['rating_average'] ?? 0);
+
+            if ($itemId <= 0 || $reviewCount <= 0) {
+                continue;
+            }
+
+            $item['review_count'] = $reviewCount;
+            $item['rating_average'] = $ratingAverage;
+            $ranked[] = $item;
+        }
+
+        usort($ranked, static function (array $left, array $right): int {
+            $leftRating = (float) ($left['rating_average'] ?? 0);
+            $rightRating = (float) ($right['rating_average'] ?? 0);
+            if ($leftRating !== $rightRating) {
+                return $rightRating <=> $leftRating;
+            }
+
+            $leftCount = (int) ($left['review_count'] ?? 0);
+            $rightCount = (int) ($right['review_count'] ?? 0);
+            if ($leftCount !== $rightCount) {
+                return $rightCount <=> $leftCount;
+            }
+
+            $leftPrice = (int) ($left['price'] ?? 0);
+            $rightPrice = (int) ($right['price'] ?? 0);
+            if ($leftPrice !== $rightPrice) {
+                return $leftPrice <=> $rightPrice;
+            }
+
+            return strcasecmp((string) ($left['name'] ?? ''), (string) ($right['name'] ?? ''));
+        });
+
+        return $ranked !== [] ? $ranked : array_slice($this->bestSellingItems, 0, 6);
     }
 
     private function answerBudget(int $budget): array
@@ -585,6 +804,9 @@ class Chatbot
         $_SESSION['chatbot_context'] = $this->context;
 
         $serializedProducts = array_map(static function (array $item): array {
+            $ratingAverage = isset($item['rating_average']) ? (float) $item['rating_average'] : null;
+            $reviewCount = isset($item['review_count']) ? (int) $item['review_count'] : null;
+
             return [
                 'id' => (int) ($item['id'] ?? 0),
                 'name' => (string) ($item['name'] ?? ''),
@@ -592,6 +814,8 @@ class Chatbot
                 'price' => format_price((int) ($item['price'] ?? 0)),
                 'image_url' => media_url((string) ($item['image_url'] ?? '')),
                 'description' => trim((string) ($item['description'] ?? '')),
+                'rating_average' => $ratingAverage,
+                'review_count' => $reviewCount,
             ];
         }, array_slice($this->uniqueItems($products), 0, 6));
 

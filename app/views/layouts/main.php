@@ -13,7 +13,6 @@ $styleCssVersion = (string) @filemtime(ROOT_PATH . '/assets/css/style.css');
 $appJsVersion = (string) @filemtime(ROOT_PATH . '/assets/js/app.js');
 $uiSparkLottieSrc = 'https://lottie.host/0479f524-f797-42f9-b75f-9150a26f8b83/x3pkmfJgGK.lottie';
 $isCustomerLoggedIn = !empty($_SESSION['customer_id']);
-$isAdminLoggedIn = !empty($_SESSION['admin_id']);
 
 $currentPath = current_path();
 $baseKeywords = setting($settings, 'seo_default_keywords', 'RoyalBread, bánh mì chảo, bánh mì Hải Dương, đồ uống');
@@ -114,14 +113,6 @@ $structuredData = [
                                 <span class="site-nav__account-label">Xin chào, <?= e((string) ($_SESSION['customer_name'] ?? 'Bạn')) ?></span>
                             </a>
                             <form method="post" action="<?= e(url('customer/logout')) ?>" style="display:inline;">
-                                <?= csrf_field() ?>
-                                <button type="submit" class="site-nav__logout-btn">Đăng xuất</button>
-                            </form>
-                        <?php elseif ($isAdminLoggedIn): ?>
-                            <a class="site-nav__account <?= is_current('admin') || is_current('admin/dashboard') ? 'active' : '' ?>" href="<?= e(url('admin/dashboard')) ?>">
-                                <span class="site-nav__account-label">Admin: <?= e((string) ($_SESSION['admin_name'] ?? 'Quản trị viên')) ?></span>
-                            </a>
-                            <form method="post" action="<?= e(url('admin/logout')) ?>" style="display:inline;">
                                 <?= csrf_field() ?>
                                 <button type="submit" class="site-nav__logout-btn">Đăng xuất</button>
                             </form>

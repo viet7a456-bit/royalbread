@@ -57,8 +57,8 @@
                 <?php foreach ($threads as $thread): ?>
                     <a class="admin-live-chat-thread<?= !empty($activeThread) && (int) $activeThread['id'] === (int) $thread['id'] ? ' is-active' : '' ?>" href="<?= e(url('admin/messages?thread=' . (int) $thread['id'])) ?>">
                         <div>
-                            <strong><?= e($thread['full_name'] ?? $thread['sender_name'] ?? 'Khách hàng') ?></strong>
-                            <span><?= e($thread['phone'] ?? '') ?></span>
+                            <strong><?= e($thread['customer_name'] ?? $thread['customer_username'] ?? 'Khách hàng') ?></strong>
+                            <span><?= e($thread['customer_phone'] ?? '') ?></span>
                         </div>
                         <p><?= e($thread['last_message'] ?? 'Chưa có nội dung') ?></p>
                         <div class="admin-live-chat-thread__meta">
@@ -100,19 +100,22 @@
         <?php if (!empty($activeThread)): ?>
             <div class="admin-live-chat-window">
                 <div class="admin-live-chat-meta">
-                    <strong><?= e($activeThread['full_name'] ?? 'Khách hàng') ?></strong>
-                    <span><?= e($activeThread['email'] ?? '') ?></span>
-                    <span><?= e($activeThread['phone'] ?? '') ?></span>
+                    <strong><?= e($activeThread['customer_name'] ?? $activeThread['customer_username'] ?? 'Khách hàng') ?></strong>
+                    <span><?= e($activeThread['customer_email'] ?? '') ?></span>
+                    <span><?= e($activeThread['customer_phone'] ?? '') ?></span>
                 </div>
 
                 <div class="admin-live-chat-messages">
                     <?php foreach ($chatMessages as $message): ?>
-                        <article class="admin-live-chat-bubble <?= ($message['sender_type'] ?? '') === 'admin' ? 'is-admin' : 'is-customer' ?>">
-                            <div class="admin-live-chat-bubble__head">
-                                <strong><?= e($message['sender_name'] ?? (($message['sender_type'] ?? '') === 'admin' ? 'Admin' : 'Khách hàng')) ?></strong>
-                                <span><?= e($message['created_at']) ?></span>
+                        <?php $isAdminMessage = ($message['sender_type'] ?? '') === 'admin'; ?>
+                        <article class="admin-live-chat__row <?= $isAdminMessage ? 'is-admin' : 'is-customer' ?>">
+                            <div class="admin-live-chat-bubble <?= $isAdminMessage ? 'is-admin' : 'is-customer' ?>">
+                                <div class="admin-live-chat-bubble__head">
+                                    <strong><?= e($message['sender_name'] ?? ($isAdminMessage ? 'Admin' : 'Khách hàng')) ?></strong>
+                                    <span><?= e($message['created_at']) ?></span>
+                                </div>
+                                <p><?= nl2br(e($message['message'])) ?></p>
                             </div>
-                            <p><?= nl2br(e($message['message'])) ?></p>
                         </article>
                     <?php endforeach; ?>
                 </div>
